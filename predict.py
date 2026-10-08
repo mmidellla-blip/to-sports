@@ -19,9 +19,9 @@ import pandas as pd
 # ── 설정값: 여기를 바꿔가며 실험해 보세요 ─────────────────────────
 CURRENT_SEASON = "2026-27"
 LAST_SEASON = "2025-26"
-HOME_ADV = 1.5        # 홈 이점(점). 데이터로 직접 구해볼 수도 있어요
+HOME_ADV = 0.85       # 홈 이점(점). 홈 +N, 원정 −N이라 점수 차엔 2N. 2025-26 270경기 실제 홈 득실차 1.7 → 0.85
 BLEND_K = 5           # 이번 시즌 경기 수가 K경기쯤 쌓이면 지난 시즌과 반반 반영
-HALF_RATIO = 0.48     # 기본 전반 비율 (전반 기록이 3경기 미만인 팀은 이 값을 씀)
+HALF_RATIO = 0.48     # 시즌 초 기본 전반 비율. 이번 시즌 전반 기록이 쌓이면 리그 실측 비율 쪽으로 옮겨감 (LEAGUE_K 속도)
 HALF_MIN_GAMES = 3
 H2H_WEIGHT = 0.25     # 상대전적(h2h.csv) 반영 비율. 0이면 상대전적 무시
 LEAGUE_K = 5          # 리그 전체 득점 변화를 믿는 속도. 외국인 2명 동시기용 제도 변화가 있어 빠르게 반영
@@ -87,6 +87,29 @@ def load_prior(path):
     return {r["team"]: {"pts": r["pts"], "opp_pts": r["opp_pts"]} for _, r in p.iterrows()}
 
 
+def prev_season(season, default):
+    """'2025-26' → '2024-25'. 형식이 다르면(예: 2025-26R6) default 그대로.
+    --season만 바꾸고 LAST_SEASON을 그대로 두면 같은 시즌 경기가 '지난 시즌'으로도 잡혀서 prior가 무시돼요."""
+    try:
+        y = int(season[:4])
+        if season == f"{y}-{str(y + 1)[2:]}":
+            return f"{y - 1}-{str(y)[2:]}"
+    except ValueError:
+        pass
+    return default
+
+
+def league_half_ratio(rows):
+    """리그 전체 전반 비율: 이번 시즌 전반 기록을 HALF_RATIO와 경기 수에 따라 섞음.
+    rows에 들어온 경기만 쓰니 백테스트에서도 그 경기 전 기록만 봐요."""
+    hv = rows[(rows["season"] == CURRENT_SEASON)].dropna(subset=["half_pts"])
+    if len(hv) == 0:
+        return HALF_RATIO
+    n = len(hv) / 2  # 팀 행 2개 = 1경기
+    w = n / (n + LEAGUE_K)
+    return (1 - w) * HALF_RATIO + w * hv["half_pts"].sum() / hv["pts"].sum()
+
+
 def team_profile(rows, team):
     """지난 시즌과 이번 시즌 평균을 경기 수에 따라 섞은 팀 프로필."""
     t = rows[rows["team"] == team]
@@ -122,7 +145,7 @@ def team_profile(rows, team):
         return (1 - w) * last_avg[col] + w * cur[col].mean()
 
     hv = t.dropna(subset=["half_pts"])
-    half_ratio = (hv["half_pts"] / hv["pts"]).mean() if len(hv) >= HALF_MIN_GAMES else HALF_RATIO
+    half_ratio = (hv["half_pts"] / hv["pts"]).mean() if len(hv) >= HALF_MIN_GAMES else league_half_ratio(rows)
     return {
         "pts": blend("pts"),
         "opp_pts": blend("opp_pts"),
@@ -199,7 +222,7 @@ def predict(rows, home, away):
     for name, p in [(home, h), (away, a)]:
         print(f"[{name}] 지난시즌 {p['games_last']} / 이번시즌 {p['games_cur']}경기 "
               f"(이번시즌 반영 {p['cur_weight']:.0%}) → "
-              f"평균 득점 {p['pts']:.1f}, 실점 {p['opp_pts']:.1f}")
+              f"평균 득점 {p['pts']:.1f}, 실점 {p['opp_pts']:.1f}, 전반 비율 {p['half_ratio']:.1%}")
 
     print("\n예상 점수")
     print(f"  전반: {home} {home_half:.1f}  vs  {away} {away_half:.1f}")
@@ -264,10 +287,10 @@ def parse_absent(text):
     return out
 
 
-def backtest(df, quiet=False):
-    """이미 끝난 이번 시즌 경기들을, 그 경기 전 데이터만으로 예측해 보고 오차를 잰다."""
+def backtest_records(df):
+    """이미 끝난 이번 시즌 경기들을, 그 경기 전 데이터만으로 예측한 결과 목록 (리포트용)."""
     cur = df[df["season"] == CURRENT_SEASON]
-    errors, hits = [], 0
+    out = []
     for _, g in cur.iterrows():
         past = df[df["date"] < g["date"]]
         try:
@@ -285,15 +308,30 @@ def backtest(df, quiet=False):
             adj = (cur_avg - last_avg) * len(prev) / (len(prev) + LEAGUE_K)
             ph += adj
             pa += adj
-        err = (abs(ph - g["home_final"]) + abs(pa - g["away_final"])) / 2
-        errors.append(err)
-        hit = (to_bin(ph, FINAL_BINS) == to_bin(g["home_final"], FINAL_BINS)
-               and to_bin(pa, FINAL_BINS) == to_bin(g["away_final"], FINAL_BINS))
-        hits += hit
-        if not quiet:
-          print(f"{g['date'].date()} {g['home']} vs {g['away']}: "
-              f"예측 {ph:.0f}-{pa:.0f} / 실제 {g['home_final']}-{g['away_final']} "
-              f"(평균 오차 {err:.1f}점){'  ✔ 최종 득점대 적중' if hit else ''}")
+        ah, aa = g["home_final"], g["away_final"]
+        out.append({
+            "date": str(g["date"].date()), "home": g["home"], "away": g["away"],
+            "pred_home": ph, "pred_away": pa, "act_home": int(ah), "act_away": int(aa),
+            "err": (abs(ph - ah) + abs(pa - aa)) / 2,
+            "bin_hit": (to_bin(ph, FINAL_BINS) == to_bin(ah, FINAL_BINS)
+                        and to_bin(pa, FINAL_BINS) == to_bin(aa, FINAL_BINS)),
+            "winner_hit": bool((ph > pa) == (ah > aa)),
+            "pred_bins": (to_bin(ph, FINAL_BINS), to_bin(pa, FINAL_BINS)),
+            "act_bins": (to_bin(ah, FINAL_BINS), to_bin(aa, FINAL_BINS)),
+        })
+    return out
+
+
+def backtest(df, quiet=False):
+    """이미 끝난 이번 시즌 경기들을, 그 경기 전 데이터만으로 예측해 보고 오차를 잰다."""
+    recs = backtest_records(df)
+    errors = [r["err"] for r in recs]
+    hits = sum(r["bin_hit"] for r in recs)
+    if not quiet:
+        for r in recs:
+            print(f"{r['date']} {r['home']} vs {r['away']}: "
+                  f"예측 {r['pred_home']:.0f}-{r['pred_away']:.0f} / 실제 {r['act_home']}-{r['act_away']} "
+                  f"(평균 오차 {r['err']:.1f}점){'  ✔ 최종 득점대 적중' if r['bin_hit'] else ''}")
     if quiet:
         return sum(errors) / len(errors) if errors else None
     if errors:
@@ -321,6 +359,7 @@ if __name__ == "__main__":
     ARGS = args
     if args.season:
         CURRENT_SEASON = args.season
+        LAST_SEASON = prev_season(args.season, LAST_SEASON)
 
     PRIOR.update(load_prior(args.prior))
     H2H.update(load_h2h(args.h2h))
