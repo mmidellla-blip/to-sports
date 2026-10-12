@@ -21,7 +21,7 @@ import pandas as pd
 
 import predict
 
-PARAMS = ["HOME_ADV", "BLEND_K", "KEEP_PTS", "KEEP_OPP", "LEAGUE_K", "HALF_RATIO", "HALF_MIN_GAMES"]
+PARAMS = ["HOME_ADV", "BLEND_K", "KEEP_PTS", "KEEP_OPP", "LEAGUE_K", "HALF_RATIO", "HALF_K"]
 
 
 def build_html(games, season):
@@ -234,6 +234,7 @@ const SLIDERS = [
   ['KEEP_OPP', '지난 시즌 실점 유지율', 0, 1, 0.05, '0이면 실점은 리그 평균으로'],
   ['LEAGUE_K', '리그 득점 변화 믿는 속도', 1, 30, 1, '작을수록 이번 시즌 득점 수준을 빨리 반영'],
   ['HALF_RATIO', '시즌 초 전반 비율', 0.4, 0.56, 0.01, '전반 기록이 쌓이면 리그 실측 비율로 옮겨감'],
+  ['HALF_K', '팀 전반 비율 믿는 속도', 1, 60, 1, '팀 경기가 이만큼 쌓이면 리그 비율과 반반'],
 ];
 const BASE = { ...INPUT.params };
 let P = { ...BASE };
@@ -295,7 +296,8 @@ function profile(past, team, p) {
   const w = n / (n + p.BLEND_K);
   const blend = k => !lastAvg ? avg(cur.map(r => r[k])) : !n ? lastAvg[k] : (1 - w) * lastAvg[k] + w * avg(cur.map(r => r[k]));
   const hv = rows.filter(r => r.half != null);
-  const ratio = hv.length >= p.HALF_MIN_GAMES ? avg(hv.map(r => r.half / r.pts)) : leagueHalfRatio(past, p);
+  const lg = leagueHalfRatio(past, p), wh = hv.length / (hv.length + p.HALF_K);  // predict.py team_profile과 같음
+  const ratio = hv.length ? (1 - wh) * lg + wh * hv.reduce((s, r) => s + r.half, 0) / hv.reduce((s, r) => s + r.pts, 0) : lg;
   return { pts: blend('pts'), opp: blend('opp'), ratio };
 }
 

@@ -21,15 +21,19 @@ CURRENT_SEASON = "2026-27"
 LAST_SEASON = "2025-26"
 HOME_ADV = 0.85       # 홈 이점(점). 홈 +N, 원정 −N이라 점수 차엔 2N. 2025-26 270경기 실제 홈 득실차 1.7 → 0.85
 BLEND_K = 5           # 이번 시즌 경기 수가 K경기쯤 쌓이면 지난 시즌과 반반 반영
-HALF_RATIO = 0.48     # 시즌 초 기본 전반 비율. 이번 시즌 전반 기록이 쌓이면 리그 실측 비율 쪽으로 옮겨감 (LEAGUE_K 속도)
-HALF_MIN_GAMES = 3
+HALF_RATIO = 0.52     # 시즌 초 기본 전반 비율. 2024-25 실측 52.0% (2025-26은 51.1%). 이번 시즌 기록이 쌓이면 그쪽으로 옮겨감 (LEAGUE_K 속도)
+HALF_K = 1000         # 팀별 전반 비율을 믿는 속도. 2025-26 백테스트: 팀별 비율은 도움이 안 되고 리그 비율만 쓸 때 가장 좋아서 사실상 끔
 H2H_WEIGHT = 0.25     # 상대전적(h2h.csv) 반영 비율. 0이면 상대전적 무시
 LEAGUE_K = 5          # 리그 전체 득점 변화를 믿는 속도. 외국인 2명 동시기용 제도 변화가 있어 빠르게 반영
 KEEP_PTS = 0.3        # 지난 시즌 '득점'이 리그 평균과 다른 정도 중 다음 시즌에 남는 비율 (3시즌 분석: 거의 0)
 KEEP_OPP = 0.7        # 지난 시즌 '실점'(수비)이 남는 비율 (3시즌 분석: 0.69)
 ABSENT_FACTOR = 0.5   # 결장 선수 득점 중 팀이 실제로 잃는 비율 (나머지는 다른 선수가 메움)
-MARGIN_SD = 12        # 점수 차가 예측에서 보통 벗어나는 폭(가정). 확률 계산용
-TOTAL_SD = 16         # 합계 점수가 예측에서 보통 벗어나는 폭(가정)
+MARGIN_SD = 12        # 점수 차가 예측에서 보통 벗어나는 폭. 2025-26 백테스트 실측 12.3
+TOTAL_SD = 17         # 합계 점수가 예측에서 보통 벗어나는 폭. 2025-26 백테스트 실측 17.2
+# 득점대 조합 확률용 (2025-26 270경기 백테스트 오차로 잼)
+HALF_SD = 7.5         # 팀 전반 점수가 예측에서 벗어나는 폭. 두 팀 전반 오차는 서로 거의 무관 (상관 0.03)
+SECOND_SD = 7.7       # 팀 후반 점수가 예측에서 벗어나는 폭
+SECOND_CORR = 0.6     # 두 팀 후반 오차가 같이 움직이는 정도 (최종 점수 오차 상관 0.32가 나오도록 맞춤)
 
 # 토토 득점대 구간 (회차마다 베트맨에서 꼭 확인!)  (하한, 상한, 이름)
 HALF_BINS = [(0, 34, "34점 이하"), (35, 39, "35~39"), (40, 44, "40~44"),
@@ -145,7 +149,12 @@ def team_profile(rows, team):
         return (1 - w) * last_avg[col] + w * cur[col].mean()
 
     hv = t.dropna(subset=["half_pts"])
-    half_ratio = (hv["half_pts"] / hv["pts"]).mean() if len(hv) >= HALF_MIN_GAMES else league_half_ratio(rows)
+    lg_ratio = league_half_ratio(rows)
+    if len(hv):
+        wh = len(hv) / (len(hv) + HALF_K)
+        half_ratio = (1 - wh) * lg_ratio + wh * hv["half_pts"].sum() / hv["pts"].sum()
+    else:
+        half_ratio = lg_ratio
     return {
         "pts": blend("pts"),
         "opp_pts": blend("opp_pts"),
@@ -231,6 +240,7 @@ def predict(rows, home, away):
     print(f"  전반: {home} {to_bin(home_half, HALF_BINS)} / {away} {to_bin(away_half, HALF_BINS)}")
     print(f"  최종: {home} {to_bin(home_final, FINAL_BINS)} / {away} {to_bin(away_final, FINAL_BINS)}")
     market_view(home, away, home_final, away_final)
+    combo_view(home, away, home_half, away_half, home_final, away_final)
     return home_final, away_final
 
 
@@ -253,6 +263,34 @@ def market_view(home, away, hf, af):
     if ARGS.total is not None:
         p = 1 - ncdf((ARGS.total - tot) / TOTAL_SD)
         print(f"  언더오버 {ARGS.total}: 예측 합계 {tot:.1f} → 오버 {p:.0%} / 언더 {1-p:.0%}")
+
+
+def combo_view(home, away, hh, ah, hf, af, n=400_000):
+    """득점대 조합 확률 상위 3개 (전반 / 최종 / 전반+최종). 점수 오차를 실측 폭으로 흩어 시뮬레이션해요."""
+    import numpy as np
+    rng = np.random.default_rng(0)
+    half = rng.normal([hh, ah], HALF_SD, (n, 2))
+    c = SECOND_CORR * SECOND_SD ** 2
+    second = rng.multivariate_normal([hf - hh, af - ah], [[SECOND_SD ** 2, c], [c, SECOND_SD ** 2]], n)
+    H, F = np.rint(half), np.rint(half + second)
+
+    def idx(x, bins):
+        return np.digitize(x, [hi + 0.5 for _, hi, _ in bins[:-1]])
+
+    hi_h, hi_a = idx(H[:, 0], HALF_BINS), idx(H[:, 1], HALF_BINS)
+    fi_h, fi_a = idx(F[:, 0], FINAL_BINS), idx(F[:, 1], FINAL_BINS)
+    hl, fl = [b[2] for b in HALF_BINS], [b[2] for b in FINAL_BINS]
+
+    def top(keys, labels):
+        vals, counts = np.unique(np.stack(keys, axis=1), axis=0, return_counts=True)
+        order = np.argsort(-counts)[:3]
+        return [(" · ".join(lab[v] for lab, v in zip(labels, vals[i])), counts[i] / n) for i in order]
+
+    print(f"\n확률 높은 득점대 조합 ({home} · {away} 순서)")
+    for name, keys, labels in (("전반", (hi_h, hi_a), (hl, hl)),
+                               ("최종", (fi_h, fi_a), (fl, fl)),
+                               ("전반+최종", (hi_h, hi_a, fi_h, fi_a), (hl, hl, fl, fl))):
+        print(f"  {name:<6}: " + "  /  ".join(f"{s} {p:.1%}" for s, p in top(keys, labels)))
 
 
 ARGS = None
@@ -309,7 +347,13 @@ def backtest_records(df):
             ph += adj
             pa += adj
         ah, aa = g["home_final"], g["away_final"]
+        phh, pah = ph * h["half_ratio"], pa * a["half_ratio"]
+        has_half = pd.notna(g["home_half"]) and pd.notna(g["away_half"])
         out.append({
+            "pred_home_half": phh, "pred_away_half": pah,
+            "act_home_half": int(g["home_half"]) if has_half else None,
+            "act_away_half": int(g["away_half"]) if has_half else None,
+            "err_half": (abs(phh - g["home_half"]) + abs(pah - g["away_half"])) / 2 if has_half else None,
             "date": str(g["date"].date()), "home": g["home"], "away": g["away"],
             "pred_home": ph, "pred_away": pa, "act_home": int(ah), "act_away": int(aa),
             "err": (abs(ph - ah) + abs(pa - aa)) / 2,
@@ -337,6 +381,12 @@ def backtest(df, quiet=False):
     if errors:
         print(f"\n{len(errors)}경기 평균 오차: {sum(errors)/len(errors):.1f}점, "
               f"최종 득점대 둘 다 적중: {hits}경기")
+        hr = [r for r in recs if r["err_half"] is not None]
+        if hr:
+            hb = sum(to_bin(r["pred_home_half"], HALF_BINS) == to_bin(r["act_home_half"], HALF_BINS)
+                     and to_bin(r["pred_away_half"], HALF_BINS) == to_bin(r["act_away_half"], HALF_BINS) for r in hr)
+            print(f"전반 {len(hr)}경기 평균 오차: {sum(r['err_half'] for r in hr) / len(hr):.1f}점, "
+                  f"전반 득점대 둘 다 적중: {hb}경기")
     else:
         print("백테스트할 이번 시즌 경기가 아직 부족해요.")
 
