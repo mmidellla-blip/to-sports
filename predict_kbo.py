@@ -6,6 +6,12 @@ KBO 득점 예측기 (야구토토 스페셜 득점대용)
   python predict_kbo.py --home LG --away SSG --home-sp 치리노스 --away-sp 화이트
   python predict_kbo.py --backtest --season 2026              # 시즌 백테스트 (경기 전날까지 데이터만 사용)
 
+홈런 O/X (kbo_games.csv에 home_hr·away_hr가 있을 때, python kbo_scores.py --fill-hr)
+  6. 예상 홈런 = 리그 홈런 × (타선 홈런/리그) × (상대 선발 피홈런/리그) × 구장 홈런 보정 × 홈 보정
+  7. 홈런 O 확률 = 1 − (홈런 0개 확률), 홈런 수는 푸아송분포 (HR_DISP를 정하면 음이항)
+  8. 홈런을 친 경기는 득점이 많아요. 그래서 '홈런 O/X × 득점대'를 같이 계산해서 매치 4칸 조합 확률을 내요
+     (홈런 O일 때 평균 득점 = 안 쳤을 때 × HR_RUN_RATIO, 두 경우 평균은 예상 득점과 같게 맞춤)
+
 데이터: kbo_games.csv (python kbo_scores.py 로 수집)
 
 계산 방식 (경기마다)
@@ -33,7 +39,17 @@ DISPERSION = 3.5     # 음이항 r. 작을수록 점수가 크게 흩어짐 (202
 FIVE_RATIO = None    # 5회까지 득점 비율. None이면 데이터에서 계산
 CAL = 1.04           # 전체 득점 보정. 선발 보정이 점수를 ~4% 낮게 잡는 걸 바로잡음 (2025로 정하고 2026으로 검증)
 
+HR_K = 120           # 팀 홈런: 이번 시즌 경기가 이만큼 쌓이면 지난 시즌과 반반 (2025로 맞춤)
+HR_KEEP = 0.3        # 지난 시즌 팀 홈런·피홈런이 리그 평균과 다른 정도 중 남는 비율 (0~0.3 비슷, 2026 확인)
+SP_HR_K = 60         # 선발 피홈런: 등판이 이만큼 쌓이면 팀 피홈런과 반반. 선발별 차이는 대부분 운이라 크게 (2025로 맞춤)
+PARK_HR_K = 120      # 구장 홈런 보정을 믿는 속도 (구장 경기 수)
+HR_DISP = None       # 팀 홈런 수 음이항 r. None이면 푸아송 (2025 백테스트에서 푸아송이 가장 좋음)
+HR_RUN_RATIO = None  # 홈런 친 경기 평균 득점 ÷ 못 친 경기. None이면 데이터에서 계산
+HR_COND_DISP = 4.5   # 홈런 O/X를 안 뒤 득점의 음이항 r (홈런 여부를 알면 덜 흩어짐, 2025로 맞춤)
+
 BINS = [(0, 1, "0~1"), (2, 3, "2~3"), (4, 5, "4~5"), (6, 7, "6~7"), (8, 9, "8~9"), (10, 99, "10+")]
+# 홈런 매치(홈런 O/X + 최종점수대) 득점대. 스페셜과 구간이 달라요 (베트맨 2026-10-14 화면 기준)
+HR_BINS = [(0, 2, "0~2"), (3, 4, "3~4"), (5, 6, "5~6"), (7, 8, "7~8"), (9, 10, "9~10"), (11, 99, "11+")]
 # ────────────────────────────────────────────────────────────────────
 
 
@@ -46,8 +62,8 @@ def load(path="kbo_games.csv"):
     for r in rows:
         r["season"] = int(r["season"])
         r["home_final"], r["away_final"] = int(r["home_final"]), int(r["away_final"])
-        for k in ("home_5", "away_5"):
-            r[k] = int(r[k]) if r[k] not in ("", None) else None
+        for k in ("home_5", "away_5", "home_hr", "away_hr"):
+            r[k] = int(r[k]) if r.get(k) not in ("", None) else None
     return rows
 
 
@@ -109,6 +125,68 @@ class State:
         for g in cur + last:
             self.home_park.setdefault(g["home"], defaultdict(int))[g["stadium"]] += 1
 
+        # 홈런: 기록이 있는 경기만
+        hcur = [g for g in cur if g["home_hr"] is not None]
+        hlast = [g for g in last if g["home_hr"] is not None]
+        self.has_hr = len(hcur) + len(hlast) >= 100
+
+        def lg_hr(gs):
+            return sum(g["home_hr"] + g["away_hr"] for g in gs) / (2 * len(gs)) if gs else None
+
+        self.hr_lg_last = lg_hr(hlast)
+        base = self.hr_lg_last or 0.85
+        self.hr_lg = (sum(g["home_hr"] + g["away_hr"] for g in hcur) + base * 100) / (2 * len(hcur) + 100)
+        self.hr_cur_t, self.hr_last_t = defaultdict(lambda: [0, 0, 0]), defaultdict(lambda: [0, 0, 0])
+        for gs, t in ((hcur, self.hr_cur_t), (hlast, self.hr_last_t)):
+            for g in gs:
+                for side, opp in (("home", "away"), ("away", "home")):
+                    x = t[g[side]]
+                    x[0] += 1
+                    x[1] += g[f"{side}_hr"]
+                    x[2] += g[f"{opp}_hr"]
+        self.sp_hr = defaultdict(lambda: [0.0, 0.0])  # 가중 등판 수, 그 경기 팀 피홈런
+        for gs, w in ((hcur, 1.0), (hlast, 0.5)):
+            for g in gs:
+                for side, opp in (("home", "away"), ("away", "home")):
+                    if g[f"{side}_sp"]:
+                        x = self.sp_hr[(g[side], g[f"{side}_sp"])]
+                        x[0] += w
+                        x[1] += w * g[f"{opp}_hr"]
+        park_hr = defaultdict(lambda: [0, 0])
+        for g in hcur + hlast:
+            park_hr[g["stadium"]][0] += 1
+            park_hr[g["stadium"]][1] += g["home_hr"] + g["away_hr"]
+        all_hr = lg_hr(hcur + hlast) or self.hr_lg
+        self.park_hr = {s: (n / (n + PARK_HR_K)) * (h / n / (2 * all_hr)) + (PARK_HR_K / (n + PARK_HR_K))
+                        for s, (n, h) in park_hr.items()}
+        # 홈런 친 팀-경기 평균 득점 ÷ 못 친 팀-경기 평균 득점
+        yes = [g[f"{s}_final"] for g in hcur + hlast for s in ("home", "away") if g[f"{s}_hr"] > 0]
+        no = [g[f"{s}_final"] for g in hcur + hlast for s in ("home", "away") if g[f"{s}_hr"] == 0]
+        self.hr_run_ratio = HR_RUN_RATIO or ((sum(yes) / len(yes)) / (sum(no) / len(no)) if yes and no else 1.8)
+
+    def team_hr(self, name):
+        """(홈런/경기, 피홈런/경기) — team()과 같은 방식."""
+        lg = self.hr_lg
+        if name in self.hr_last_t and self.hr_lg_last:
+            n, s, a = self.hr_last_t[name]
+            prior_s = lg + HR_KEEP * (s / n - self.hr_lg_last)
+            prior_a = lg + HR_KEEP * (a / n - self.hr_lg_last)
+        else:
+            prior_s = prior_a = lg
+        n, s, a = self.hr_cur_t.get(name, (0, 0, 0))
+        w = n / (n + HR_K)
+        return (w * (s / n if n else 0) + (1 - w) * prior_s,
+                w * (a / n if n else 0) + (1 - w) * prior_a)
+
+    def starter_hr(self, team, name):
+        """그 선발이 나온 경기의 팀 피홈런 (등판 적으면 팀 피홈런 쪽으로)."""
+        team_a = self.team_hr(team)[1]
+        if not name:
+            return team_a
+        n, a = self.sp_hr.get((team, name), (0, 0))
+        w = n / (n + SP_HR_K)
+        return w * (a / n if n else 0) + (1 - w) * team_a
+
     def team(self, name):
         """(득점/경기, 실점/경기) — 지난 시즌을 평균 회귀시킨 뒤 이번 시즌과 섞음."""
         lg = self.lg
@@ -142,10 +220,23 @@ def nb_pmf(k, mu, r):
     return math.exp(math.lgamma(k + r) - math.lgamma(r) - math.lgamma(k + 1) + r * math.log(p) + k * math.log(1 - p))
 
 
-def bin_probs(mu, r=None):
+def bin_probs(mu, r=None, bins=None):
     r = r or DISPERSION
     pm = [nb_pmf(k, mu, r) for k in range(60)]
-    return [sum(pm[lo:min(hi, 59) + 1]) for lo, hi, _ in BINS]
+    return [sum(pm[lo:min(hi, 59) + 1]) for lo, hi, _ in (bins or BINS)]
+
+
+def hr_yes(lam, r=None):
+    """홈런 1개 이상 확률 (음이항 0개 확률의 나머지)."""
+    r = r or HR_DISP
+    return 1 - (r / (r + lam)) ** r if r else 1 - math.exp(-lam)
+
+
+def hr_joint(mu, p, ratio):
+    """[홈런 X일 때 득점대 확률들, 홈런 O일 때]. 두 경우를 합친 평균 득점이 mu가 되게 나눠요."""
+    mu0 = mu / (p * ratio + 1 - p)
+    r = HR_COND_DISP or DISPERSION
+    return [[(1 - p) * x for x in bin_probs(mu0, r, HR_BINS)], [p * x for x in bin_probs(mu0 * ratio, r, HR_BINS)]]
 
 
 def predict(st, home, away, home_sp=None, away_sp=None, stadium=None):
@@ -158,14 +249,23 @@ def predict(st, home, away, home_sp=None, away_sp=None, stadium=None):
     lg = st.lg
     mu_h = lg * (hs / lg) * (a_sp_ra / lg) * park * HOME_ADV * CAL
     mu_a = lg * (as_ / lg) * (h_sp_ra / lg) * park / HOME_ADV * CAL
-    return {"home": home, "away": away, "home_sp": home_sp, "away_sp": away_sp, "stadium": stadium,
-            "park": park, "home_sp_n": h_n, "away_sp_n": a_n, "mu_home": mu_h, "mu_away": mu_a,
-            "home_bins": bin_probs(mu_h), "away_bins": bin_probs(mu_a),
-            "home_bins5": bin_probs(mu_h * st.five_ratio), "away_bins5": bin_probs(mu_a * st.five_ratio)}
+    out = {"home": home, "away": away, "home_sp": home_sp, "away_sp": away_sp, "stadium": stadium,
+           "park": park, "home_sp_n": h_n, "away_sp_n": a_n, "mu_home": mu_h, "mu_away": mu_a,
+           "home_bins": bin_probs(mu_h), "away_bins": bin_probs(mu_a),
+           "home_bins5": bin_probs(mu_h * st.five_ratio), "away_bins5": bin_probs(mu_a * st.five_ratio)}
+    if st.has_hr:
+        lg = st.hr_lg
+        park_hr = st.park_hr.get(stadium, 1.0)
+        lam_h = lg * (st.team_hr(home)[0] / lg) * (st.starter_hr(away, away_sp) / lg) * park_hr * HOME_ADV
+        lam_a = lg * (st.team_hr(away)[0] / lg) * (st.starter_hr(home, home_sp) / lg) * park_hr / HOME_ADV
+        ph, pa = hr_yes(lam_h), hr_yes(lam_a)
+        out.update(park_hr=park_hr, lam_home=lam_h, lam_away=lam_a, hr_home=ph, hr_away=pa,
+                   joint_home=hr_joint(mu_h, ph, st.hr_run_ratio), joint_away=hr_joint(mu_a, pa, st.hr_run_ratio))
+    return out
 
 
-def to_bin(x):
-    for i, (lo, hi, _) in enumerate(BINS):
+def to_bin(x, bins=None):
+    for i, (lo, hi, _) in enumerate(bins or BINS):
         if lo <= x <= hi:
             return i
 
@@ -193,6 +293,28 @@ def show(p, five=False):
         print(f"  {p['away']:<6}" + "  ".join(f"{x * 100:4.0f}%" for x in p[ak]))
         combos = sorted(((p[hk][i] * p[ak][j], i, j) for i in range(len(BINS)) for j in range(len(BINS))), reverse=True)[:3]
         print("  확률 높은 조합: " + " / ".join(f"{p['home']} {lab[i]}·{p['away']} {lab[j]} {pr * 100:.1f}%" for pr, i, j in combos))
+    if "hr_home" in p:
+        show_hr(p, [b[2] for b in HR_BINS])
+
+
+def show_hr(p, lab):
+    """홈런 O/X와 최종 득점대 매치 (4칸: 홈 홈런 · 원정 홈런 · 홈 득점대 · 원정 득점대)."""
+    ox = "XO"
+    print(f"\n[홈런] 예상 홈런 {p['home']} {p['lam_home']:.2f}개 / {p['away']} {p['lam_away']:.2f}개 "
+          f"(구장 홈런 보정 x{p['park_hr']:.2f})")
+    print(f"▶ 홈런 O 확률: {p['home']} {p['hr_home'] * 100:.0f}%  /  {p['away']} {p['hr_away'] * 100:.0f}%")
+    for team, j in ((p["home"], p["joint_home"]), (p["away"], p["joint_away"])):
+        for o in (1, 0):
+            tot = sum(j[o])
+            best = max(range(len(lab)), key=lambda i: j[o][i])
+            print(f"  {team} 홈런 {ox[o]}일 때 득점대: "
+                  + "  ".join(f"{lab[i]} {j[o][i] / tot * 100:.0f}%" for i in range(len(lab))) + f"  → {lab[best]}")
+    H, A = p["joint_home"], p["joint_away"]
+    combos = sorted(((H[a][i] * A[b][k], a, b, i, k) for a in (0, 1) for b in (0, 1)
+                     for i in range(len(lab)) for k in range(len(lab))), reverse=True)[:5]
+    print(f"확률 높은 매치 4칸 조합 ({p['home']} 홈런 · {p['away']} 홈런 · {p['home']} 득점대 · {p['away']} 득점대)")
+    for n, (pr, a, b, i, k) in enumerate(combos, 1):
+        print(f"  {n}. {ox[a]} · {ox[b]} · {lab[i]} · {lab[k]}  {pr * 100:.1f}%")
 
 
 def today_games(day):
@@ -210,6 +332,8 @@ def backtest(games, season, quiet=False, start_after=0):
     for g in gs:
         by_date[g["date"]].append(g)
     n = ae = ll = ll_base = hit = 0
+    hr = defaultdict(float)  # 홈런 O/X 검증 합계
+    cal = defaultdict(lambda: [0, 0.0, 0])  # 확률 구간별 (팀-경기 수, 예측 합, 실제 O 수)
     for day in sorted(by_date):
         st = State(games, season, before=day)
         if st.n_cur < start_after:
@@ -226,12 +350,39 @@ def backtest(games, season, quiet=False, start_after=0):
                 ll += -math.log(max(probs[b], 1e-9))
                 ll_base += -math.log(max(base[b], 1e-9))
                 hit += probs.index(max(probs)) == b
+                if "hr_home" in p and g[f"{side}_hr"] is not None:
+                    o = int(g[f"{side}_hr"] > 0)
+                    q = p[f"hr_{side}"]
+                    q0 = hr_yes(st.hr_lg)
+                    hr["n"] += 1
+                    hr["ll"] += -math.log(q if o else 1 - q)
+                    hr["ll_base"] += -math.log(q0 if o else 1 - q0)
+                    hr["hit"] += (q >= 0.5) == bool(o)
+                    hr["o"] += o
+                    c = cal[min(int(q * 10), 9)]
+                    c[0] += 1
+                    c[1] += q
+                    c[2] += o
+                    # 홈런 O/X와 득점대를 같이 맞힐 확률: 같이 계산 vs 따로 곱하기
+                    hb = to_bin(y, HR_BINS)
+                    hp = bin_probs(p[f"mu_{side}"], bins=HR_BINS)
+                    hr["ll_joint"] += -math.log(max(p[f"joint_{side}"][o][hb], 1e-12))
+                    hr["ll_indep"] += -math.log(max((q if o else 1 - q) * hp[hb], 1e-12))
     if not quiet:
         print(f"{season} 시즌 {n // 2}경기 백테스트 (팀 득점 {n}개)")
         print(f"  평균 오차        : {ae / n:.2f}점")
         print(f"  최다확률 득점대 적중: {hit / n * 100:.1f}%")
         print(f"  로그손실         : 모델 {ll / n:.4f}  vs  리그평균만 {ll_base / n:.4f}  "
               f"({'모델이 나음' if ll < ll_base else '모델이 못함'}, 낮을수록 좋음)")
+        if hr["n"]:
+            m = hr["n"]
+            print(f"\n홈런 O/X ({int(m)}팀-경기, 실제 O 비율 {hr['o'] / m * 100:.1f}%)")
+            print(f"  로그손실         : 모델 {hr['ll'] / m:.4f}  vs  리그평균만 {hr['ll_base'] / m:.4f}")
+            print(f"  O/X 적중(50% 기준): {hr['hit'] / m * 100:.1f}%")
+            print(f"  홈런×득점대 로그손실: 같이 계산 {hr['ll_joint'] / m:.4f}  vs  따로 곱하기 {hr['ll_indep'] / m:.4f}")
+            print("  확률 구간별 (예측 → 실제):  " + "  ".join(
+                f"{k * 10}~{k * 10 + 9}% {c[1] / c[0] * 100:.0f}→{c[2] / c[0] * 100:.0f}% ({c[0]})"
+                for k, c in sorted(cal.items())))
     return ae / n, ll / n, ll_base / n
 
 

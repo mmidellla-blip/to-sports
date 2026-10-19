@@ -104,6 +104,15 @@ select { background: var(--surface); color: var(--text); border: 1px solid var(-
 .pick .t b { font-size: 13px; }
 .pick .p { font-size: 17px; font-weight: 700; margin: 2px 0; }
 .pick .a { font-size: 12px; color: var(--text-2); }
+.combo { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 12px; }
+.combo .l { color: var(--text-2); margin-right: 2px; }
+.chip { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); }
+.chip.ok { background: var(--good-bg); border-color: var(--good-bd); color: var(--good); font-weight: 700; }
+.chip.no { background: var(--bad-bg); border-color: var(--bad-bd); }
+.cmp { width: 100%; border-collapse: collapse; margin: 12px 0 4px; font-size: 12px; }
+.cmp th, .cmp td { padding: 4px 6px; text-align: center; border-bottom: 1px solid var(--border); }
+.cmp th { color: var(--text-2); font-weight: 600; }
+.cmp td:first-child, .cmp th:first-child { text-align: left; color: var(--text-2); }
 
 .scores { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
 .scores th, .scores td { padding: 6px 8px; text-align: center; border-bottom: 1px solid var(--border); }
@@ -139,7 +148,7 @@ footer { color: var(--muted); font-size: 12px; margin-top: 16px; }
   <header>
     <div>
       <h1>KBL 백테스트</h1>
-      <div class="sub">시즌 2026-27 · 각 경기를 그 경기 전 데이터만으로 예측해서 실제와 비교 · 생성 2026-10-14 10:18</div>
+      <div class="sub">시즌 2026-27 · 각 경기를 그 경기 전 데이터만으로 예측해서 실제와 비교 · 생성 2026-10-19 12:27</div>
     </div>
     <button class="btn" id="themeBtn">다크/라이트</button>
   </header>
@@ -173,12 +182,13 @@ footer { color: var(--muted); font-size: 12px; margin-top: 16px; }
   <div class="games" id="games"></div>
 
   <footer>매치 칸 = 득점대(구간)를 맞혔는지 · 예측 점수는 반올림해서 보여줘요 (칸 판정도 반올림 기준) ·
-    상대전적·결장·수동 보정은 백테스트에 들어가지 않아요 (predict.py --backtest와 같음) · 전반 기록이 없는 경기는 전반 칸을 세지 않아요</footer>
+    상대전적·결장·수동 보정은 백테스트에 들어가지 않아요 (predict.py --backtest와 같음) · 전반 기록이 없는 경기는 전반 칸을 세지 않아요 ·
+    최다 확률 조합은 전반 기록이 있는 경기만 4칸으로 세요</footer>
 </div>
 <div id="tip"></div>
 
 <script>
-const INPUT = {"games": [{"date": "2026-10-03", "season": "2026-27", "home": "부산KCC", "away": "창원LG", "home_half": 30, "away_half": 53, "home_final": 68, "away_final": 103}, {"date": "2026-10-03", "season": "2026-27", "home": "고양소노", "away": "대구한국가스공사", "home_half": 47, "away_half": 43, "home_final": 82, "away_final": 73}, {"date": "2026-10-03", "season": "2026-27", "home": "안양정관장", "away": "울산현대모비스", "home_half": 51, "away_half": 45, "home_final": 88, "away_final": 85}, {"date": "2026-10-04", "season": "2026-27", "home": "원주DB", "away": "고양소노", "home_half": 45, "away_half": 54, "home_final": 95, "away_final": 86}, {"date": "2026-10-04", "season": "2026-27", "home": "수원KT", "away": "서울삼성", "home_half": 45, "away_half": 45, "home_final": 76, "away_final": 81}, {"date": "2026-10-05", "season": "2026-27", "home": "울산현대모비스", "away": "부산KCC", "home_half": 44, "away_half": 61, "home_final": 87, "away_final": 97}, {"date": "2026-10-05", "season": "2026-27", "home": "대구한국가스공사", "away": "안양정관장", "home_half": 38, "away_half": 48, "home_final": 80, "away_final": 86}, {"date": "2026-10-06", "season": "2026-27", "home": "수원KT", "away": "창원LG", "home_half": 53, "away_half": 39, "home_final": 97, "away_final": 72}, {"date": "2026-10-07", "season": "2026-27", "home": "부산KCC", "away": "대구한국가스공사", "home_half": 58, "away_half": 50, "home_final": 103, "away_final": 98}, {"date": "2026-10-08", "season": "2026-27", "home": "원주DB", "away": "창원LG", "home_half": 43, "away_half": 45, "home_final": 92, "away_final": 96}, {"date": "2026-10-09", "season": "2026-27", "home": "수원KT", "away": "고양소노", "home_half": 49, "away_half": 44, "home_final": 88, "away_final": 79}, {"date": "2026-10-09", "season": "2026-27", "home": "서울삼성", "away": "안양정관장", "home_half": 33, "away_half": 32, "home_final": 66, "away_final": 58}, {"date": "2026-10-10", "season": "2026-27", "home": "부산KCC", "away": "원주DB", "home_half": 36, "away_half": 46, "home_final": 79, "away_final": 85}, {"date": "2026-10-10", "season": "2026-27", "home": "울산현대모비스", "away": "대구한국가스공사", "home_half": 36, "away_half": 46, "home_final": 75, "away_final": 81}, {"date": "2026-10-11", "season": "2026-27", "home": "안양정관장", "away": "창원LG", "home_half": 51, "away_half": 39, "home_final": 88, "away_final": 65}, {"date": "2026-10-11", "season": "2026-27", "home": "서울삼성", "away": "고양소노", "home_half": 43, "away_half": 41, "home_final": 82, "away_final": 81}, {"date": "2026-10-11", "season": "2026-27", "home": "부산KCC", "away": "수원KT", "home_half": 42, "away_half": 41, "home_final": 81, "away_final": 87}, {"date": "2026-10-12", "season": "2026-27", "home": "울산현대모비스", "away": "원주DB", "home_half": 53, "away_half": 46, "home_final": 99, "away_final": 89}, {"date": "2026-10-13", "season": "2026-27", "home": "안양정관장", "away": "고양소노", "home_half": 45, "away_half": 43, "home_final": 85, "away_final": 81}], "prior": {"창원LG": {"pts": 77.1, "opp_pts": 71.8}, "안양정관장": {"pts": 75.2, "opp_pts": 72.0}, "원주DB": {"pts": 80.2, "opp_pts": 79.9}, "서울SK": {"pts": 78.6, "opp_pts": 75.3}, "부산KCC": {"pts": 83.1, "opp_pts": 84.3}, "고양소노": {"pts": 79.2, "opp_pts": 76.6}, "수원KT": {"pts": 77.2, "opp_pts": 79.1}, "울산현대모비스": {"pts": 74.4, "opp_pts": 78.5}, "대구한국가스공사": {"pts": 76.1, "opp_pts": 79.9}, "서울삼성": {"pts": 79.8, "opp_pts": 83.3}}, "current": "2026-27", "last": "2025-26", "half_bins": [[0, 34, "34점 이하"], [35, 39, "35~39"], [40, 44, "40~44"], [45, 49, "45~49"], [50, 54, "50~54"], [55, 999, "55점 이상"]], "final_bins": [[0, 69, "69점 이하"], [70, 79, "70~79"], [80, 89, "80~89"], [90, 99, "90~99"], [100, 109, "100~109"], [110, 999, "110점 이상"]], "params": {"HOME_ADV": 0.85, "BLEND_K": 5, "KEEP_PTS": 0.3, "KEEP_OPP": 0.7, "LEAGUE_K": 5, "HALF_RATIO": 0.52, "HALF_K": 1000}};
+const INPUT = {"games": [{"date": "2026-10-03", "season": "2026-27", "home": "부산KCC", "away": "창원LG", "home_half": 30, "away_half": 53, "home_final": 68, "away_final": 103}, {"date": "2026-10-03", "season": "2026-27", "home": "고양소노", "away": "대구한국가스공사", "home_half": 47, "away_half": 43, "home_final": 82, "away_final": 73}, {"date": "2026-10-03", "season": "2026-27", "home": "안양정관장", "away": "울산현대모비스", "home_half": 51, "away_half": 45, "home_final": 88, "away_final": 85}, {"date": "2026-10-04", "season": "2026-27", "home": "원주DB", "away": "고양소노", "home_half": 45, "away_half": 54, "home_final": 95, "away_final": 86}, {"date": "2026-10-04", "season": "2026-27", "home": "수원KT", "away": "서울삼성", "home_half": 45, "away_half": 45, "home_final": 76, "away_final": 81}, {"date": "2026-10-05", "season": "2026-27", "home": "울산현대모비스", "away": "부산KCC", "home_half": 44, "away_half": 61, "home_final": 87, "away_final": 97}, {"date": "2026-10-05", "season": "2026-27", "home": "대구한국가스공사", "away": "안양정관장", "home_half": 38, "away_half": 48, "home_final": 80, "away_final": 86}, {"date": "2026-10-06", "season": "2026-27", "home": "수원KT", "away": "창원LG", "home_half": 53, "away_half": 39, "home_final": 97, "away_final": 72}, {"date": "2026-10-07", "season": "2026-27", "home": "부산KCC", "away": "대구한국가스공사", "home_half": 58, "away_half": 50, "home_final": 103, "away_final": 98}, {"date": "2026-10-08", "season": "2026-27", "home": "원주DB", "away": "창원LG", "home_half": 43, "away_half": 45, "home_final": 92, "away_final": 96}, {"date": "2026-10-09", "season": "2026-27", "home": "수원KT", "away": "고양소노", "home_half": 49, "away_half": 44, "home_final": 88, "away_final": 79}, {"date": "2026-10-09", "season": "2026-27", "home": "서울삼성", "away": "안양정관장", "home_half": 33, "away_half": 32, "home_final": 66, "away_final": 58}, {"date": "2026-10-10", "season": "2026-27", "home": "울산현대모비스", "away": "대구한국가스공사", "home_half": 36, "away_half": 46, "home_final": 75, "away_final": 81}, {"date": "2026-10-10", "season": "2026-27", "home": "부산KCC", "away": "원주DB", "home_half": 36, "away_half": 46, "home_final": 79, "away_final": 85}, {"date": "2026-10-11", "season": "2026-27", "home": "안양정관장", "away": "창원LG", "home_half": 51, "away_half": 39, "home_final": 88, "away_final": 65}, {"date": "2026-10-11", "season": "2026-27", "home": "서울삼성", "away": "고양소노", "home_half": 43, "away_half": 41, "home_final": 82, "away_final": 81}, {"date": "2026-10-11", "season": "2026-27", "home": "부산KCC", "away": "수원KT", "home_half": 42, "away_half": 41, "home_final": 81, "away_final": 87}, {"date": "2026-10-12", "season": "2026-27", "home": "울산현대모비스", "away": "원주DB", "home_half": 53, "away_half": 46, "home_final": 99, "away_final": 89}, {"date": "2026-10-13", "season": "2026-27", "home": "안양정관장", "away": "고양소노", "home_half": 45, "away_half": 43, "home_final": 85, "away_final": 81}, {"date": "2026-10-14", "season": "2026-27", "home": "대구한국가스공사", "away": "수원KT", "home_half": 36, "away_half": 41, "home_final": 82, "away_final": 69}, {"date": "2026-10-15", "season": "2026-27", "home": "서울삼성", "away": "창원LG", "home_half": 41, "away_half": 48, "home_final": 93, "away_final": 86}, {"date": "2026-10-16", "season": "2026-27", "home": "고양소노", "away": "울산현대모비스", "home_half": 43, "away_half": 39, "home_final": 95, "away_final": 82}, {"date": "2026-10-17", "season": "2026-27", "home": "안양정관장", "away": "수원KT", "home_half": 45, "away_half": 23, "home_final": 89, "away_final": 69}, {"date": "2026-10-17", "season": "2026-27", "home": "원주DB", "away": "서울삼성", "home_half": 45, "away_half": 46, "home_final": 92, "away_final": 95}, {"date": "2026-10-17", "season": "2026-27", "home": "대구한국가스공사", "away": "창원LG", "home_half": 44, "away_half": 33, "home_final": 85, "away_final": 75}, {"date": "2026-10-18", "season": "2026-27", "home": "수원KT", "away": "울산현대모비스", "home_half": 38, "away_half": 59, "home_final": 80, "away_final": 96}, {"date": "2026-10-18", "season": "2026-27", "home": "서울SK", "away": "고양소노", "home_half": 42, "away_half": 43, "home_final": 81, "away_final": 87}, {"date": "2026-10-18", "season": "2026-27", "home": "안양정관장", "away": "부산KCC", "home_half": 36, "away_half": 45, "home_final": 81, "away_final": 74}], "prior": {"창원LG": {"pts": 77.1, "opp_pts": 71.8}, "안양정관장": {"pts": 75.2, "opp_pts": 72.0}, "원주DB": {"pts": 80.2, "opp_pts": 79.9}, "서울SK": {"pts": 78.6, "opp_pts": 75.3}, "부산KCC": {"pts": 83.1, "opp_pts": 84.3}, "고양소노": {"pts": 79.2, "opp_pts": 76.6}, "수원KT": {"pts": 77.2, "opp_pts": 79.1}, "울산현대모비스": {"pts": 74.4, "opp_pts": 78.5}, "대구한국가스공사": {"pts": 76.1, "opp_pts": 79.9}, "서울삼성": {"pts": 79.8, "opp_pts": 83.3}}, "current": "2026-27", "last": "2025-26", "half_bins": [[0, 34, "34점 이하"], [35, 39, "35~39"], [40, 44, "40~44"], [45, 49, "45~49"], [50, 54, "50~54"], [55, 999, "55점 이상"]], "final_bins": [[0, 69, "69점 이하"], [70, 79, "70~79"], [80, 89, "80~89"], [90, 99, "90~99"], [100, 109, "100~109"], [110, 999, "110점 이상"]], "params": {"HOME_ADV": 0.85, "BLEND_K": 5, "KEEP_PTS": 0.3, "KEEP_OPP": 0.7, "LEAGUE_K": 5, "HALF_RATIO": 0.52, "HALF_K": 1000}, "sim": {"HALF_SD": 7.5, "SECOND_SD": 7.7, "SECOND_CORR": 0.6, "zs": [-12.693012315439578, -11.753178461616617, -10.973300958513551, -10.275741581733518, -9.63088568694906, -9.023480280417651, -8.444371322523448, -7.887517316500365, -7.348660565908913, -6.824651320745979, -6.313069914905499, -5.811999987702531, -5.319884620419086, -4.8354308858789565, -4.357544108790291, -3.8852811172483914, -3.4178160486847764, -2.9544146888801195, -2.494414743040023, -2.037210303259033, -1.582239319674964, -1.1289732315096481, -0.6769081422063474, -0.22555707298016336, 0.22555707298016336, 0.6769081422063474, 1.1289732315096481, 1.582239319674964, 2.037210303259033, 2.494414743040023, 2.9544146888801195, 3.4178160486847764, 3.8852811172483914, 4.357544108790291, 4.8354308858789565, 5.319884620419086, 5.811999987702531, 6.313069914905499, 6.824651320745979, 7.348660565908913, 7.887517316500365, 8.444371322523448, 9.023480280417651, 9.63088568694906, 10.275741581733518, 10.973300958513551, 11.753178461616617, 12.693012315439578], "zw": [4.477155473875909e-36, 3.3764561431353977e-31, 2.0790589714186624e-27, 3.139476644799188e-24, 1.7988549162372895e-21, 4.925465109698984e-19, 7.419993598064828e-17, 6.7566772746571655e-15, 3.975805958471501e-13, 1.5883609812463425e-11, 4.474287153436362e-10, 9.154055746313818e-09, 1.3927916895599565e-07, 1.6063936955426115e-06, 1.4266092324246835e-05, 9.881804917611342e-05, 0.0005395865846271887, 0.0023430821117604002, 0.008149696855351924, 0.022838212100091373, 0.05180518354956028, 0.09546340056142932, 0.14328245699317615, 0.17546354181186605, 0.17546354181186605, 0.14328245699317615, 0.09546340056142932, 0.05180518354956028, 0.022838212100091373, 0.008149696855351924, 0.0023430821117604002, 0.0005395865846271887, 9.881804917611342e-05, 1.4266092324246835e-05, 1.6063936955426115e-06, 1.3927916895599565e-07, 9.154055746313818e-09, 4.474287153436362e-10, 1.5883609812463425e-11, 3.975805958471501e-13, 6.7566772746571655e-15, 7.419993598064828e-17, 4.925465109698984e-19, 1.7988549162372895e-21, 3.139476644799188e-24, 2.0790589714186624e-27, 3.3764561431353977e-31, 4.477155473875909e-36]}};
 const SLIDERS = [
   ['HOME_ADV', '홈 이점', 0, 6, 0.5, '홈팀 +N점, 원정팀 −N점'],
   ['BLEND_K', '이번 시즌 믿는 속도', 1, 30, 1, '이 경기 수가 쌓이면 지난 시즌과 반반'],
@@ -253,6 +263,46 @@ function profile(past, team, p) {
   return { pts: blend('pts'), opp: blend('opp'), ratio };
 }
 
+/* ── 최다 확률 조합 (predict.py combo_probs와 같은 계산) ── */
+function ncdf(x) {
+  x /= Math.SQRT2;
+  const a = Math.abs(x), t = 1 / (1 + 0.3275911 * a);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-a * a);
+  return 0.5 * (1 + Math.sign(x) * y);
+}
+function comboSide(muH, muS) {  // [공통오차][전반칸][최종칸] 확률
+  const S = INPUT.sim, hb = INPUT.half_bins, fb = INPUT.final_bins, nh = hb.length, nf = fb.length;
+  const r = S.SECOND_CORR, own = S.SECOND_SD * Math.sqrt(1 - r), com = S.SECOND_SD * Math.sqrt(r);
+  const fe = [-Infinity, ...fb.slice(0, -1).map(b => b[1] + 0.5), Infinity];
+  const zs = S.zs, sd = S.HALF_SD, nz = zs.length, cell = nh * nf;
+  const out = new Float64Array(nz * cell);  // [공통오차][전반칸][최종칸]
+  for (let h = Math.floor(muH - 6 * sd); h <= Math.ceil(muH + 6 * sd); h++) {
+    const ph = ncdf((h + 0.5 - muH) / sd) - ncdf((h - 0.5 - muH) / sd);
+    let b = 0; while (b < nh - 1 && h > hb[b][1] + 0.5) b++;
+    for (let zi = 0; zi < nz; zi++) {
+      const m = h + muS + com * zs[zi], base = zi * cell + b * nf;
+      let prev = 0;
+      for (let f = 0; f < nf; f++) {
+        const c = f === nf - 1 ? 1 : ncdf((fe[f + 1] - m) / own);
+        out[base + f] += ph * (c - prev); prev = c;
+      }
+    }
+  }
+  return out;
+}
+function topCombo(p) {  // 4칸 조합 중 모델 확률 최대
+  const nh = INPUT.half_bins.length, nf = INPUT.final_bins.length, w = INPUT.sim.zw, nz = w.length, cell = nh * nf;
+  const A = comboSide(p.hh, p.hf - p.hh), B = comboSide(p.ah, p.af - p.ah);
+  let best = -1, bi = null;
+  for (let a = 0; a < nh; a++) for (let b = 0; b < nh; b++) for (let c = 0; c < nf; c++) for (let d = 0; d < nf; d++) {
+    let s = 0;
+    for (let z = 0; z < nz; z++) s += w[z] * A[z * cell + a * nf + c] * B[z * cell + b * nf + d];
+    if (s > best + 1e-12) { best = s; bi = [a, b, c, d]; }
+  }
+  const bins = [INPUT.half_bins, INPUT.half_bins, INPUT.final_bins, INPUT.final_bins];
+  return { names: bi.map((k, i) => bins[i][k][2]), prob: best };
+}
+
 function band5(m) {  // 승5패 구간 (홈 기준 점수 차)
   return m >= 6 ? 'home' : m <= -6 ? 'away' : 'close';
 }
@@ -288,9 +338,12 @@ function runBacktest(p) {
       { label: '최종', side: 'home', ...pick('hf', INPUT.final_bins) },
       { label: '최종', side: 'away', ...pick('af', INPUT.final_bins) },
     ];
+    const tc = topCombo(pred);
+    const combo = { prob: tc.prob, picks: tc.names.map((name, i) => ({ pred: name, hit: picks[i].hit == null ? null : name === picks[i].act })) };
+    combo.hits = combo.picks.filter(x => x.hit).length;
     const pm = r0(ph) - r0(pa), am = act.hf - act.af;
     out.push({
-      date: g.date, home: g.home, away: g.away, pred, act, hasHalf, picks,
+      date: g.date, home: g.home, away: g.away, pred, act, hasHalf, picks, combo,
       hits: picks.filter(x => x.hit).length, counted: picks.filter(x => x.hit != null).length,
       err: (Math.abs(ph - act.hf) + Math.abs(pa - act.af)) / 2,
       pm: ph - pa, am, winner_hit: (ph > pa) === (am > 0),
@@ -303,9 +356,13 @@ function runBacktest(p) {
 function stats(d) {
   const n = d.length || 1;
   const slot = i => { const c = d.filter(x => x.picks[i].hit != null); return { hit: c.filter(x => x.picks[i].hit).length, n: c.length }; };
+  const cslot = i => d.filter(x => x.combo.picks[i].hit).length;
+  const full = d.filter(x => x.counted === 4);
   return {
     n: d.length, slots: [0, 1, 2, 3].map(slot),
     all4: d.filter(x => x.counted === 4 && x.hits === 4).length,
+    cslots: [0, 1, 2, 3].map(cslot), call4: full.filter(x => x.combo.hits === 4).length,
+    cexp: full.reduce((s, x) => s + x.combo.prob, 0), n4: full.length,
     final2: d.filter(x => x.picks[2].hit && x.picks[3].hit).length,
     win: d.filter(x => x.winner_hit).length, band: d.filter(x => x.band_hit).length,
     err: d.reduce((s, x) => s + x.err, 0) / n,
@@ -335,6 +392,13 @@ function renderSummary() {
       </div>
       <div class="allhit">4칸 모두 적중 <b class="num">${s.all4}경기</b>${delta(s.all4, b.all4, false)}
         · 최종 2칸 적중 <b class="num">${s.final2}경기</b>${delta(s.final2, b.final2, false)}</div>
+      <table class="cmp num">
+        <tr><th>고르는 방법</th>${names.map(x => `<th>${x}</th>`).join('')}<th>4칸</th></tr>
+        <tr><td>예상 점수 득점대</td>${s.slots.map(x => `<td>${x.hit}</td>`).join('')}<td><b>${s.all4}</b></td></tr>
+        <tr><td>최다 확률 조합</td>${s.cslots.map(x => `<td>${x}</td>`).join('')}<td><b>${s.call4}</b>${delta(s.call4, b.call4, false)}</td></tr>
+      </table>
+      <div class="desc">최다 확률 조합 = 모델이 4칸을 한 번에 맞힐 확률이 가장 높다고 본 조합 (predict.py "전반+최종" 1위).
+        모델 기대 4칸 적중 ${f1(s.cexp)}경기 / ${s.n4}경기</div>
     </div>
     <div class="card">
       <h2>다른 게임으로 보면</h2>
@@ -385,6 +449,9 @@ function card(d) {
       ${badge}
     </div>
     <div class="picks">${picks}</div>
+    <div class="combo"><span class="l">최다 확률 조합 <span class="num">(모델 ${(d.combo.prob * 100).toFixed(1)}%)</span></span>
+      ${d.combo.picks.map(x => `<span class="chip ${x.hit == null ? '' : x.hit ? 'ok' : 'no'}">${x.pred}</span>`).join('')}
+      <b class="num">${d.combo.hits}/${d.counted}칸</b></div>
     <table class="scores">
       <tr><th></th><th>전반</th><th>후반</th><th>최종</th></tr>
       <tr class="pred"><td>예측</td><td>${predHalf}</td><td>${predSecond}</td><td>${sc(r0(PR.hf), r0(PR.af))}</td></tr>

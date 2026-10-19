@@ -14,6 +14,7 @@ KBL 경기 점수대 예측기 (농구토토 매치 연습용)
 
 import argparse
 import math
+import numpy as np
 import pandas as pd
 
 # ── 설정값: 여기를 바꿔가며 실험해 보세요 ─────────────────────────
@@ -265,32 +266,68 @@ def market_view(home, away, hf, af):
         print(f"  언더오버 {ARGS.total}: 예측 합계 {tot:.1f} → 오버 {p:.0%} / 언더 {1-p:.0%}")
 
 
-def combo_view(home, away, hh, ah, hf, af, n=400_000):
-    """득점대 조합 확률 상위 3개 (전반 / 최종 / 전반+최종). 점수 오차를 실측 폭으로 흩어 시뮬레이션해요."""
-    import numpy as np
-    rng = np.random.default_rng(0)
-    half = rng.normal([hh, ah], HALF_SD, (n, 2))
-    c = SECOND_CORR * SECOND_SD ** 2
-    second = rng.multivariate_normal([hf - hh, af - ah], [[SECOND_SD ** 2, c], [c, SECOND_SD ** 2]], n)
-    H, F = np.rint(half), np.rint(half + second)
+def ncdf_np(x):
+    """정규분포 누적확률 (배열용, 오차 1e-7). report.py 브라우저 계산과 같은 식."""
+    x = np.asarray(x, float) / math.sqrt(2)
+    a = np.abs(x)
+    t = 1 / (1 + 0.3275911 * a)
+    y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
+             + 0.254829592) * t * np.exp(-a * a)
+    return 0.5 * (1 + np.sign(x) * y)
 
-    def idx(x, bins):
-        return np.digitize(x, [hi + 0.5 for _, hi, _ in bins[:-1]])
 
-    hi_h, hi_a = idx(H[:, 0], HALF_BINS), idx(H[:, 1], HALF_BINS)
-    fi_h, fi_a = idx(F[:, 0], FINAL_BINS), idx(F[:, 1], FINAL_BINS)
+_ZS, _ZW = np.polynomial.hermite_e.hermegauss(48)
+_ZW = _ZW / _ZW.sum()
+
+
+def combo_probs(hh, ah, hf, af):
+    """매치 4칸 득점대 조합 확률표 [홈 전반][원정 전반][홈 최종][원정 최종] (6x6x6x6).
+    전반 오차는 두 팀 따로(HALF_SD), 후반 오차는 두 팀이 같이 움직이는 부분(SECOND_CORR)을 나눠
+    그 공통 부분을 적분해서 정확히 계산해요 (시뮬레이션과 차이 0.04%p 이내, 매번 같은 값)."""
+    r = SECOND_CORR
+    own_sd = SECOND_SD * math.sqrt(1 - r)
+
+    def side(mu_h, mu_s, bins_h, bins_f):
+        he = [hi + 0.5 for _, hi, _ in bins_h[:-1]]
+        fe = np.array([-np.inf] + [hi + 0.5 for _, hi, _ in bins_f[:-1]] + [np.inf])
+        h = np.arange(math.floor(mu_h - 6 * HALF_SD), math.ceil(mu_h + 6 * HALF_SD) + 1)
+        ph = ncdf_np((h + 0.5 - mu_h) / HALF_SD) - ncdf_np((h - 0.5 - mu_h) / HALF_SD)
+        hb = np.digitize(h, he)
+        m = h[None, :, None] + mu_s + SECOND_SD * math.sqrt(r) * _ZS[:, None, None]
+        pf = np.diff(ncdf_np((fe[None, None, :] - m) / own_sd), axis=2)  # (공통오차, 전반점수, 최종칸)
+        out = np.zeros((len(_ZS), len(bins_h), len(bins_f)))
+        for b in range(len(bins_h)):
+            out[:, b, :] = np.einsum("h,zhf->zf", ph * (hb == b), pf)
+        return out
+
+    A = side(hh, hf - hh, HALF_BINS, FINAL_BINS)
+    B = side(ah, af - ah, HALF_BINS, FINAL_BINS)
+    return np.einsum("z,zab,zcd->acbd", _ZW, A, B)
+
+
+def top_combo(hh, ah, hf, af):
+    """모델이 가장 높게 보는 4칸 조합 (득점대 이름 4개)과 그 확률."""
+    J = combo_probs(hh, ah, hf, af)
+    i = np.unravel_index(J.argmax(), J.shape)
+    names = [b[k][2] for b, k in zip((HALF_BINS, HALF_BINS, FINAL_BINS, FINAL_BINS), i)]
+    return names, float(J[i])
+
+
+def combo_view(home, away, hh, ah, hf, af):
+    """득점대 조합 확률 상위 3개 (전반 / 최종 / 전반+최종). 점수 오차를 실측 폭으로 흩어 계산해요."""
+    J = combo_probs(hh, ah, hf, af)
     hl, fl = [b[2] for b in HALF_BINS], [b[2] for b in FINAL_BINS]
 
-    def top(keys, labels):
-        vals, counts = np.unique(np.stack(keys, axis=1), axis=0, return_counts=True)
-        order = np.argsort(-counts)[:3]
-        return [(" · ".join(lab[v] for lab, v in zip(labels, vals[i])), counts[i] / n) for i in order]
+    def top(p, labels):
+        order = np.argsort(-p, axis=None, kind="stable")[:3]
+        return [(" · ".join(lab[v] for lab, v in zip(labels, np.unravel_index(i, p.shape))), p.flat[i])
+                for i in order]
 
     print(f"\n확률 높은 득점대 조합 ({home} · {away} 순서)")
-    for name, keys, labels in (("전반", (hi_h, hi_a), (hl, hl)),
-                               ("최종", (fi_h, fi_a), (fl, fl)),
-                               ("전반+최종", (hi_h, hi_a, fi_h, fi_a), (hl, hl, fl, fl))):
-        print(f"  {name:<6}: " + "  /  ".join(f"{s} {p:.1%}" for s, p in top(keys, labels)))
+    for name, p, labels in (("전반", J.sum(axis=(2, 3)), (hl, hl)),
+                            ("최종", J.sum(axis=(0, 1)), (fl, fl)),
+                            ("전반+최종", J, (hl, hl, fl, fl))):
+        print(f"  {name:<6}: " + "  /  ".join(f"{s} {p:.1%}" for s, p in top(p, labels)))
 
 
 ARGS = None
@@ -349,7 +386,9 @@ def backtest_records(df):
         ah, aa = g["home_final"], g["away_final"]
         phh, pah = ph * h["half_ratio"], pa * a["half_ratio"]
         has_half = pd.notna(g["home_half"]) and pd.notna(g["away_half"])
+        combo, combo_p = top_combo(phh, pah, ph, pa)
         out.append({
+            "top_combo": combo, "top_combo_prob": combo_p,
             "pred_home_half": phh, "pred_away_half": pah,
             "act_home_half": int(g["home_half"]) if has_half else None,
             "act_away_half": int(g["away_half"]) if has_half else None,
@@ -387,6 +426,19 @@ def backtest(df, quiet=False):
                      and to_bin(r["pred_away_half"], HALF_BINS) == to_bin(r["act_away_half"], HALF_BINS) for r in hr)
             print(f"전반 {len(hr)}경기 평균 오차: {sum(r['err_half'] for r in hr) / len(hr):.1f}점, "
                   f"전반 득점대 둘 다 적중: {hb}경기")
+            # 매치 4칸: 예상 점수 득점대 vs 모델 최다 확률 조합
+            def slots(r):
+                return [(r["act_home_half"], HALF_BINS), (r["act_away_half"], HALF_BINS),
+                        (r["act_home"], FINAL_BINS), (r["act_away"], FINAL_BINS)]
+            pts = [[to_bin(r["pred_home_half"], HALF_BINS), to_bin(r["pred_away_half"], HALF_BINS),
+                    to_bin(r["pred_home"], FINAL_BINS), to_bin(r["pred_away"], FINAL_BINS)] for r in hr]
+            print(f"\n매치 4칸 ({len(hr)}경기)        전반홈 전반원정 최종홈 최종원정 | 4칸 적중")
+            for name, picks in (("예상 점수 득점대", pts), ("최다 확률 조합  ", [r["top_combo"] for r in hr])):
+                hit = [[p == to_bin(v, b) for p, (v, b) in zip(pk, slots(r))] for pk, r in zip(picks, hr)]
+                cols = " ".join(f"{sum(h[i] for h in hit):3d}/{len(hr):<3d}" for i in range(4))
+                print(f"  {name}  {cols} | {sum(all(h) for h in hit)}경기")
+            print(f"  (최다 확률 조합의 모델 확률 평균 {np.mean([r['top_combo_prob'] for r in hr]):.1%} "
+                  f"→ 기대 적중 {sum(r['top_combo_prob'] for r in hr):.1f}경기)")
     else:
         print("백테스트할 이번 시즌 경기가 아직 부족해요.")
 

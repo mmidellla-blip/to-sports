@@ -38,6 +38,9 @@ def build_html(games, season):
         "current": season, "last": predict.LAST_SEASON,
         "half_bins": predict.HALF_BINS, "final_bins": predict.FINAL_BINS,
         "params": {k: getattr(predict, k) for k in PARAMS},
+        # 최다 확률 조합 계산용 (predict.combo_probs와 같은 값)
+        "sim": {"HALF_SD": predict.HALF_SD, "SECOND_SD": predict.SECOND_SD, "SECOND_CORR": predict.SECOND_CORR,
+                "zs": predict._ZS.tolist(), "zw": predict._ZW.tolist()},
     }
     data = json.dumps(payload, ensure_ascii=False, default=float)
     created = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -152,6 +155,15 @@ select { background: var(--surface); color: var(--text); border: 1px solid var(-
 .pick .t b { font-size: 13px; }
 .pick .p { font-size: 17px; font-weight: 700; margin: 2px 0; }
 .pick .a { font-size: 12px; color: var(--text-2); }
+.combo { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; font-size: 12px; }
+.combo .l { color: var(--text-2); margin-right: 2px; }
+.chip { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); }
+.chip.ok { background: var(--good-bg); border-color: var(--good-bd); color: var(--good); font-weight: 700; }
+.chip.no { background: var(--bad-bg); border-color: var(--bad-bd); }
+.cmp { width: 100%; border-collapse: collapse; margin: 12px 0 4px; font-size: 12px; }
+.cmp th, .cmp td { padding: 4px 6px; text-align: center; border-bottom: 1px solid var(--border); }
+.cmp th { color: var(--text-2); font-weight: 600; }
+.cmp td:first-child, .cmp th:first-child { text-align: left; color: var(--text-2); }
 
 .scores { width: 100%; border-collapse: collapse; margin-top: 12px; font-variant-numeric: tabular-nums; }
 .scores th, .scores td { padding: 6px 8px; text-align: center; border-bottom: 1px solid var(--border); }
@@ -221,7 +233,8 @@ footer { color: var(--muted); font-size: 12px; margin-top: 16px; }
   <div class="games" id="games"></div>
 
   <footer>매치 칸 = 득점대(구간)를 맞혔는지 · 예측 점수는 반올림해서 보여줘요 (칸 판정도 반올림 기준) ·
-    상대전적·결장·수동 보정은 백테스트에 들어가지 않아요 (predict.py --backtest와 같음) · 전반 기록이 없는 경기는 전반 칸을 세지 않아요</footer>
+    상대전적·결장·수동 보정은 백테스트에 들어가지 않아요 (predict.py --backtest와 같음) · 전반 기록이 없는 경기는 전반 칸을 세지 않아요 ·
+    최다 확률 조합은 전반 기록이 있는 경기만 4칸으로 세요</footer>
 </div>
 <div id="tip"></div>
 
@@ -301,6 +314,46 @@ function profile(past, team, p) {
   return { pts: blend('pts'), opp: blend('opp'), ratio };
 }
 
+/* ── 최다 확률 조합 (predict.py combo_probs와 같은 계산) ── */
+function ncdf(x) {
+  x /= Math.SQRT2;
+  const a = Math.abs(x), t = 1 / (1 + 0.3275911 * a);
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-a * a);
+  return 0.5 * (1 + Math.sign(x) * y);
+}
+function comboSide(muH, muS) {  // [공통오차][전반칸][최종칸] 확률
+  const S = INPUT.sim, hb = INPUT.half_bins, fb = INPUT.final_bins, nh = hb.length, nf = fb.length;
+  const r = S.SECOND_CORR, own = S.SECOND_SD * Math.sqrt(1 - r), com = S.SECOND_SD * Math.sqrt(r);
+  const fe = [-Infinity, ...fb.slice(0, -1).map(b => b[1] + 0.5), Infinity];
+  const zs = S.zs, sd = S.HALF_SD, nz = zs.length, cell = nh * nf;
+  const out = new Float64Array(nz * cell);  // [공통오차][전반칸][최종칸]
+  for (let h = Math.floor(muH - 6 * sd); h <= Math.ceil(muH + 6 * sd); h++) {
+    const ph = ncdf((h + 0.5 - muH) / sd) - ncdf((h - 0.5 - muH) / sd);
+    let b = 0; while (b < nh - 1 && h > hb[b][1] + 0.5) b++;
+    for (let zi = 0; zi < nz; zi++) {
+      const m = h + muS + com * zs[zi], base = zi * cell + b * nf;
+      let prev = 0;
+      for (let f = 0; f < nf; f++) {
+        const c = f === nf - 1 ? 1 : ncdf((fe[f + 1] - m) / own);
+        out[base + f] += ph * (c - prev); prev = c;
+      }
+    }
+  }
+  return out;
+}
+function topCombo(p) {  // 4칸 조합 중 모델 확률 최대
+  const nh = INPUT.half_bins.length, nf = INPUT.final_bins.length, w = INPUT.sim.zw, nz = w.length, cell = nh * nf;
+  const A = comboSide(p.hh, p.hf - p.hh), B = comboSide(p.ah, p.af - p.ah);
+  let best = -1, bi = null;
+  for (let a = 0; a < nh; a++) for (let b = 0; b < nh; b++) for (let c = 0; c < nf; c++) for (let d = 0; d < nf; d++) {
+    let s = 0;
+    for (let z = 0; z < nz; z++) s += w[z] * A[z * cell + a * nf + c] * B[z * cell + b * nf + d];
+    if (s > best + 1e-12) { best = s; bi = [a, b, c, d]; }
+  }
+  const bins = [INPUT.half_bins, INPUT.half_bins, INPUT.final_bins, INPUT.final_bins];
+  return { names: bi.map((k, i) => bins[i][k][2]), prob: best };
+}
+
 function band5(m) {  // 승5패 구간 (홈 기준 점수 차)
   return m >= 6 ? 'home' : m <= -6 ? 'away' : 'close';
 }
@@ -336,9 +389,12 @@ function runBacktest(p) {
       { label: '최종', side: 'home', ...pick('hf', INPUT.final_bins) },
       { label: '최종', side: 'away', ...pick('af', INPUT.final_bins) },
     ];
+    const tc = topCombo(pred);
+    const combo = { prob: tc.prob, picks: tc.names.map((name, i) => ({ pred: name, hit: picks[i].hit == null ? null : name === picks[i].act })) };
+    combo.hits = combo.picks.filter(x => x.hit).length;
     const pm = r0(ph) - r0(pa), am = act.hf - act.af;
     out.push({
-      date: g.date, home: g.home, away: g.away, pred, act, hasHalf, picks,
+      date: g.date, home: g.home, away: g.away, pred, act, hasHalf, picks, combo,
       hits: picks.filter(x => x.hit).length, counted: picks.filter(x => x.hit != null).length,
       err: (Math.abs(ph - act.hf) + Math.abs(pa - act.af)) / 2,
       pm: ph - pa, am, winner_hit: (ph > pa) === (am > 0),
@@ -351,9 +407,13 @@ function runBacktest(p) {
 function stats(d) {
   const n = d.length || 1;
   const slot = i => { const c = d.filter(x => x.picks[i].hit != null); return { hit: c.filter(x => x.picks[i].hit).length, n: c.length }; };
+  const cslot = i => d.filter(x => x.combo.picks[i].hit).length;
+  const full = d.filter(x => x.counted === 4);
   return {
     n: d.length, slots: [0, 1, 2, 3].map(slot),
     all4: d.filter(x => x.counted === 4 && x.hits === 4).length,
+    cslots: [0, 1, 2, 3].map(cslot), call4: full.filter(x => x.combo.hits === 4).length,
+    cexp: full.reduce((s, x) => s + x.combo.prob, 0), n4: full.length,
     final2: d.filter(x => x.picks[2].hit && x.picks[3].hit).length,
     win: d.filter(x => x.winner_hit).length, band: d.filter(x => x.band_hit).length,
     err: d.reduce((s, x) => s + x.err, 0) / n,
@@ -383,6 +443,13 @@ function renderSummary() {
       </div>
       <div class="allhit">4칸 모두 적중 <b class="num">${s.all4}경기</b>${delta(s.all4, b.all4, false)}
         · 최종 2칸 적중 <b class="num">${s.final2}경기</b>${delta(s.final2, b.final2, false)}</div>
+      <table class="cmp num">
+        <tr><th>고르는 방법</th>${names.map(x => `<th>${x}</th>`).join('')}<th>4칸</th></tr>
+        <tr><td>예상 점수 득점대</td>${s.slots.map(x => `<td>${x.hit}</td>`).join('')}<td><b>${s.all4}</b></td></tr>
+        <tr><td>최다 확률 조합</td>${s.cslots.map(x => `<td>${x}</td>`).join('')}<td><b>${s.call4}</b>${delta(s.call4, b.call4, false)}</td></tr>
+      </table>
+      <div class="desc">최다 확률 조합 = 모델이 4칸을 한 번에 맞힐 확률이 가장 높다고 본 조합 (predict.py "전반+최종" 1위).
+        모델 기대 4칸 적중 ${f1(s.cexp)}경기 / ${s.n4}경기</div>
     </div>
     <div class="card">
       <h2>다른 게임으로 보면</h2>
@@ -433,6 +500,9 @@ function card(d) {
       ${badge}
     </div>
     <div class="picks">${picks}</div>
+    <div class="combo"><span class="l">최다 확률 조합 <span class="num">(모델 ${(d.combo.prob * 100).toFixed(1)}%)</span></span>
+      ${d.combo.picks.map(x => `<span class="chip ${x.hit == null ? '' : x.hit ? 'ok' : 'no'}">${x.pred}</span>`).join('')}
+      <b class="num">${d.combo.hits}/${d.counted}칸</b></div>
     <table class="scores">
       <tr><th></th><th>전반</th><th>후반</th><th>최종</th></tr>
       <tr class="pred"><td>예측</td><td>${predHalf}</td><td>${predSecond}</td><td>${sc(r0(PR.hf), r0(PR.af))}</td></tr>

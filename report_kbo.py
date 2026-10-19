@@ -8,6 +8,7 @@ KBO 백테스트 결과를 브라우저에서 보기
 
 경기 전날까지 데이터만으로 예측한 결과를 실제와 비교해요.
 시즌 요약, 득점대별 '예측 확률 vs 실제 비율', 팀별 오차, 월별 추이, 경기별 상세를 보여줘요.
+홈런 기록이 있으면 홈런 O/X 검증과 매치 4칸(홈런 O/X 2칸 + 최종 득점대 2칸) 조합 적중도 보여줘요.
 결과 파일은 인터넷 없이도 열리는 HTML 한 개예요.
 """
 import argparse
@@ -31,7 +32,20 @@ def records(games, season):
         base = P.bin_probs(st.lg)
         for g in by_date[day]:
             p = P.predict(st, g["home"], g["away"], g["home_sp"], g["away_sp"], g["stadium"])
-            out.append({
+            hr = {}
+            if "hr_home" in p and g["home_hr"] is not None:
+                # 매치 4칸 (홈 홈런 · 원정 홈런 · 홈 득점대 · 원정 득점대): 모델 최다 확률 조합과 실제 조합 확률
+                H, A = p["joint_home"], p["joint_away"]
+                top = max(((H[a][i] * A[b][k], a, b, i, k) for a in (0, 1) for b in (0, 1)
+                           for i in range(len(P.HR_BINS)) for k in range(len(P.HR_BINS))))
+                act = (int(g["home_hr"] > 0), int(g["away_hr"] > 0),
+                       P.to_bin(g["home_final"], P.HR_BINS), P.to_bin(g["away_final"], P.HR_BINS))
+                hr = {"home_hr": g["home_hr"], "away_hr": g["away_hr"],
+                      "hr_home": round(p["hr_home"], 4), "hr_away": round(p["hr_away"], 4),
+                      "hr_base": round(P.hr_yes(st.hr_lg), 4),
+                      "combo": list(top[1:]), "combo_p": round(top[0], 5),
+                      "act_p": round(H[act[0]][act[2]] * A[act[1]][act[3]], 6)}
+            out.append({**hr,
                 "date": g["date"], "stadium": g["stadium"], "home": g["home"], "away": g["away"],
                 "home_sp": g["home_sp"], "away_sp": g["away_sp"],
                 "home_sp_n": round(p["home_sp_n"], 1), "away_sp_n": round(p["away_sp_n"], 1),
@@ -45,8 +59,10 @@ def records(games, season):
 
 
 def build_html(recs, season):
-    payload = {"season": season, "bins": [b[2] for b in P.BINS], "games": recs,
-               "params": {k: getattr(P, k) for k in ("TEAM_K", "KEEP_LAST", "SP_K", "PARK_K", "HOME_ADV", "DISPERSION")}}
+    payload = {"season": season, "bins": [b[2] for b in P.BINS], "hr_bins": [b[2] for b in P.HR_BINS],
+               "hr_edges": [b[1] for b in P.HR_BINS], "games": recs,
+               "params": {k: getattr(P, k) for k in ("TEAM_K", "KEEP_LAST", "SP_K", "PARK_K", "HOME_ADV", "DISPERSION",
+                                                     "HR_K", "HR_KEEP", "SP_HR_K", "HR_COND_DISP")}}
     return TEMPLATE.replace("__DATA__", json.dumps(payload, ensure_ascii=False)).replace("__SEASON__", str(season))
 
 
@@ -86,12 +102,18 @@ th{color:var(--mute);font-weight:600;position:sticky;top:0;background:var(--card
  <div class="card"><h2>월별 · 평균 오차와 득점대 적중률</h2><div id="monthly"></div>
   <div class="legend"><span><i class="sw" style="background:var(--acc)"></i>평균 오차(점)</span><span><i class="sw" style="background:var(--acc2)"></i>최다확률 득점대 적중률</span></div></div>
 </div>
+<div class="card" id="hrCard" hidden><h2>홈런 O/X · 매치 4칸 <span class="miss" style="font-weight:400;font-size:12px">최종점수대: 0~2 · 3~4 · 5~6 · 7~8 · 9~10 · 11+</span></h2>
+ <div class="grid2"><div><div id="hrCalib"></div>
+  <div class="legend"><span><i class="sw" style="background:var(--acc)"></i>모델 예측 평균</span><span><i class="sw" style="background:var(--acc2)"></i>실제 홈런 O 비율</span></div>
+  <p class="note">모델이 본 홈런 O 확률 구간별로 묶었어요. 두 막대가 비슷할수록 확률이 믿을 만해요. (20팀-경기 미만 구간은 뺐어요)</p></div>
+  <div><table id="hrTable"></table><p class="note" id="hrNote"></p></div></div></div>
 <div class="card"><h2>팀별 결과</h2><div class="scroll" style="max-height:none"><table id="teams"></table></div></div>
 <div class="card"><h2>경기별 상세</h2>
  <div class="controls"><select id="fTeam"><option value="">전체 팀</option></select><select id="fMonth"><option value="">전체 월</option></select>
   <select id="fHit"><option value="">전체</option><option value="2">두 팀 다 적중</option><option value="0">둘 다 빗나감</option></select></div>
  <div class="scroll"><table id="games"></table></div>
- <p class="note">막대는 득점대별 예측 확률이에요(주황 = 실제 득점대). ✔ = 모델이 가장 높게 본 득점대가 맞음.</p></div>
+ <p class="note">막대는 득점대별 예측 확률이에요(주황 = 실제 득점대). ✔ = 모델이 가장 높게 본 득점대가 맞음.
+  홈런 칸: 모델 O 확률 → 실제 홈런 수, ✔ = 50% 기준으로 찍은 O/X가 맞음. 4칸 조합: 모델 최다 확률 조합 (홈 홈런 · 원정 홈런 · 홈 득점대 · 원정 득점대)과 맞은 칸 수.</p></div>
 <p class="note" id="params"></p>
 </main>
 <script>
@@ -108,6 +130,11 @@ const gp=D.games.reduce((a,g)=>a+g.home_bins[binOf(g.home_final)]*g.away_bins[bi
 const tiles=[["경기 수",D.games.length+"경기","팀 득점 "+n+"개"],["팀 득점 평균 오차",mae.toFixed(2)+"점","예상 득점 vs 실제"],
  ["득점대 적중률",(hit*100).toFixed(1)+"%","모델이 가장 높게 본 칸 (무작위 16.7%)"],["두 팀 동시 적중",both+"경기",(both/D.games.length*100).toFixed(1)+"%"],
  ["리그 평균 대비",((1-Math.exp(llb-ll))*-100).toFixed(1)+"%",ll<llb?"실제 결과에 준 확률이 더 높음":"리그 평균보다 못함"]];
+const HG=D.games.filter(g=>g.hr_home!=null);
+const HS=[];HG.forEach(g=>["home","away"].forEach(s=>HS.push({q:g["hr_"+s],q0:g.hr_base,o:g[s+"_hr"]>0})));
+if(HS.length){const m=HS.length,mo=HS.filter(x=>x.o).length/m,hl=HS.reduce((a,x)=>a-Math.log(x.o?x.q:1-x.q),0)/m,hb=HS.reduce((a,x)=>a-Math.log(x.o?x.q0:1-x.q0),0)/m;
+ tiles.push(["홈런 O/X 적중",(HS.filter(x=>(x.q>=.5)==x.o).length/m*100).toFixed(1)+"%",`늘 ${mo>=.5?"O":"X"}로 찍기 ${(Math.max(mo,1-mo)*100).toFixed(1)}%`],
+  ["홈런 확률 리그 평균 대비",((1-Math.exp(hb-hl))*-100).toFixed(1)+"%",hl<hb?"실제 결과에 준 확률이 더 높음":"리그 평균보다 못함"])}
 document.getElementById('tiles').innerHTML=tiles.map(t=>`<div class="tile"><div class="k">${t[0]}</div><div class="v">${t[1]}</div><div class="n">${t[2]}</div></div>`).join("");
 // calibration
 (function(){const W=480,H=220,pl=34,pb=24,pt=10;const pred=B.map((_,i)=>mean(x=>x.p[i])),act=B.map((_,i)=>mean(x=>x.b==i));
@@ -125,6 +152,18 @@ document.getElementById('tiles').innerHTML=tiles.map(t=>`<div class="tile"><div 
  s+=path(d=>y1(d.mae),"var(--acc)")+path(d=>y2(d.hit),"var(--acc2)");
  m.forEach((d,i)=>{s+=`<text x="${x(i)}" y="${H-6}" text-anchor="middle">${+d.k}월</text><rect x="${x(i)-12}" y="${pt}" width="24" height="${H-pt-pb}" fill="transparent"><title>${+d.k}월 ${d.n}경기 · 오차 ${d.mae.toFixed(2)} · 적중 ${(d.hit*100).toFixed(1)}%</title></rect>`});
  document.getElementById('monthly').innerHTML=s+"</svg>"})();
+// 홈런 O/X · 매치 4칸
+const OX=o=>o?"O":"X",HB=D.hr_bins,hrBin=x=>D.hr_edges.findIndex(h=>x<=h),comboHits=g=>{const a=[+(g.home_hr>0),+(g.away_hr>0),hrBin(g.home_final),hrBin(g.away_final)];return g.combo.filter((v,i)=>v==a[i]).length};
+if(HS.length){document.getElementById('hrCard').hidden=false;
+ (function(){const W=480,H=220,pl=34,pb=24,pt=10;const bk=[];for(let k=0;k<10;k++){const a=HS.filter(x=>Math.min(9,Math.floor(x.q*10))==k);if(a.length>=20)bk.push({k,n:a.length,p:a.reduce((s,x)=>s+x.q,0)/a.length,o:a.filter(x=>x.o).length/a.length})}
+  const y=v=>pt+(H-pt-pb)*(1-v),bw=(W-pl)/Math.max(bk.length,1);let s=`<svg viewBox="0 0 ${W} ${H}" width="100%">`;
+  for(let t=0;t<=1+1e-9;t+=0.2){s+=`<line x1="${pl}" x2="${W}" y1="${y(t)}" y2="${y(t)}" stroke="var(--line)"/><text x="${pl-4}" y="${y(t)+4}" text-anchor="end">${Math.round(t*100)}%</text>`}
+  bk.forEach((d,i)=>{const x=pl+i*bw;s+=`<rect x="${x+bw*.15}" y="${y(d.p)}" width="${bw*.33}" height="${y(0)-y(d.p)}" fill="var(--acc)" rx="2"><title>예측 평균 ${(d.p*100).toFixed(1)}%</title></rect>`;
+   s+=`<rect x="${x+bw*.52}" y="${y(d.o)}" width="${bw*.33}" height="${y(0)-y(d.o)}" fill="var(--acc2)" rx="2"><title>실제 ${(d.o*100).toFixed(1)}% (${d.n}팀-경기)</title></rect><text x="${x+bw/2}" y="${H-6}" text-anchor="middle">${d.k*10}~${d.k*10+9}% (${d.n})</text>`});
+  document.getElementById('hrCalib').innerHTML=s+"</svg>"})();
+ const cnt=[0,0,0,0,0];HG.forEach(g=>cnt[comboHits(g)]++);const exp=HG.reduce((a,g)=>a+g.combo_p,0),ap=HG.reduce((a,g)=>a+g.act_p,0)/HG.length;
+ document.getElementById('hrTable').innerHTML=`<tr><th class="l">최다 확률 조합 맞은 칸</th><th>경기</th><th>비율</th></tr>`+[4,3,2,1,0].map(k=>`<tr><td class="l">${k==4?"<b>4칸 모두</b>":k+"칸"}</td><td>${cnt[k]}</td><td>${(cnt[k]/HG.length*100).toFixed(1)}%</td></tr>`).join("");
+ document.getElementById('hrNote').textContent=`${HG.length}경기 · 4칸 모두 적중 ${cnt[4]}경기 (모델 기대 ${exp.toFixed(1)}경기, 조합 확률 평균 ${(exp/HG.length*100).toFixed(1)}%) · 실제 결과 조합에 모델이 준 확률 평균 ${(ap*100).toFixed(2)}%`}
 // teams
 (function(){const t={};sides.forEach(x=>{(t[x.team]=t[x.team]||[]).push(x)});
  const rows=Object.entries(t).map(([k,a])=>({k,n:a.length,mu:a.reduce((s,x)=>s+x.mu,0)/a.length,y:a.reduce((s,x)=>s+x.y,0)/a.length,mae:a.reduce((s,x)=>s+Math.abs(x.mu-x.y),0)/a.length,hit:a.filter(x=>x.hit).length/a.length})).sort((a,b)=>a.mae-b.mae);
@@ -136,10 +175,14 @@ const teams=[...new Set(sides.map(x=>x.team))].sort(),months=[...new Set(sides.m
 fTeam.innerHTML+=teams.map(t=>`<option>${t}</option>`).join("");fMonth.innerHTML+=months.map(m=>`<option value="${m}">${+m}월</option>`).join("");
 function draw(){const T=fTeam.value,M=fMonth.value,Hh=fHit.value;
  const rows=D.games.filter(g=>(!T||g.home==T||g.away==T)&&(!M||g.date.slice(5,7)==M)).map(g=>{const hb=binOf(g.home_final),ab=binOf(g.away_final),hh=argmax(g.home_bins)==hb,ah=argmax(g.away_bins)==ab;return{g,hb,ab,hh,ah,c:hh+ah}}).filter(r=>Hh===""||(Hh=="2"?r.c==2:r.c==0)).reverse();
- games.innerHTML=`<tr><th class="l">날짜</th><th class="l">경기 (홈 vs 원정)</th><th class="l">선발</th><th>예상</th><th>실제</th><th class="l">홈 득점대</th><th class="l">원정 득점대</th></tr>`+
+ games.innerHTML=`<tr><th class="l">날짜</th><th class="l">경기 (홈 vs 원정)</th><th class="l">선발</th><th>예상</th><th>실제</th><th class="l">홈 득점대</th><th class="l">원정 득점대</th>${HS.length?'<th class="l">홈런 (홈 / 원정)</th><th class="l">4칸 조합</th>':""}</tr>`+
  rows.map(({g,hb,ab,hh,ah})=>`<tr><td class="l">${g.date.slice(5)}</td><td class="l">${g.home} vs ${g.away} <span class="miss">@${g.stadium}</span></td><td class="l miss">${g.home_sp} / ${g.away_sp}</td>
  <td>${g.mu_home.toFixed(1)} : ${g.mu_away.toFixed(1)}</td><td><b>${g.home_final} : ${g.away_final}</b></td>
- <td class="l">${bar(g.home_bins,hb)} <span class="${hh?"hit":"miss"}">${hh?"✔":""} ${B[hb]}</span></td><td class="l">${bar(g.away_bins,ab)} <span class="${ah?"hit":"miss"}">${ah?"✔":""} ${B[ab]}</span></td></tr>`).join("")}
+ <td class="l">${bar(g.home_bins,hb)} <span class="${hh?"hit":"miss"}">${hh?"✔":""} ${B[hb]}</span></td><td class="l">${bar(g.away_bins,ab)} <span class="${ah?"hit":"miss"}">${ah?"✔":""} ${B[ab]}</span></td>${HS.length?hrCells(g):""}</tr>`).join("")}
+function hrCells(g){if(g.hr_home==null)return'<td class="l miss">기록 없음</td><td></td>';
+ const one=s=>{const q=g["hr_"+s],n=g[s+"_hr"],ok=(q>=.5)==(n>0);return`<span class="${ok?"hit":"miss"}">${ok?"✔":""} ${Math.round(q*100)}%→${n}개</span>`};
+ const k=comboHits(g),c=g.combo;
+ return`<td class="l">${one("home")} / ${one("away")}</td><td class="l"><span class="${k==4?"hit":"miss"}">${OX(c[0])}·${OX(c[1])}·${HB[c[2]]}·${HB[c[3]]}</span> <b>${k}/4</b> <span class="miss">${(g.combo_p*100).toFixed(1)}%</span></td>`}
 [fTeam,fMonth,fHit].forEach(e=>e.onchange=draw);draw();
 document.getElementById('params').textContent="설정값: "+Object.entries(D.params).map(([k,v])=>k+"="+v).join(" · ");
 </script></body></html>
