@@ -374,3 +374,24 @@ python season_check.py season_2023-24.csv season_2024-25.csv season_2025-26.csv
 - **모르는 것**: 새로 온 선수 효과(→ `--boost`), 그날 컨디션, 판정, 연전 피로, 경기 속도
 - **기대치**: 농구 점수는 같은 두 팀도 10점씩 흔들려요. 현실적 목표는 평균 오차 7점 안팎
 - **토토**: 매치 네 칸을 다 맞히는 건 대략 수십 번에 한 번. 운영 측 몫이 있어 평균적으로는 잃는 구조예요. 예측은 매 경기, 구매는 가끔 소액으로만.
+
+---
+
+# 배구 (V리그) 승패·세트스코어 예측기
+
+남자부·여자부 정규리그 경기의 **승패**와 **세트스코어**(3:0 / 3:1 / 3:2 / 2:3 / 1:3 / 0:3) 확률을 내요.
+설계: `docs/superpowers/specs/2026-11-10-volleyball-predictor-design.md`
+
+```
+python vb_fetch.py 023                                   # 이번 시즌 결과 받아서 vb_games.csv 갱신 (경기 끝날 때마다)
+python predict_vb.py --date 20261110                     # 그날 경기 전부 예측
+python predict_vb.py --home 현대캐피탈 --away 대한항공    # 두 팀 지정 (남/여는 팀 이름으로 자동)
+python predict_vb.py --backtest --season 2025-26         # 시즌 백테스트 (경기 전날까지 데이터만)
+python predict_vb.py --tune --season 2024-25             # 설정값 격자 탐색 (출력만, 값은 안 바꿈)
+python report_vb.py                                      # 이번 시즌 백테스트 → backtest_vb.html
+python -m unittest test_vb -v                            # 계산 검증
+```
+
+받기가 막히면: 브라우저 kovo.co.kr 일정/결과 → F12 → Network → `game-schedule` 응답을 `kovo_023.json`으로 저장 → `python vb_fetch.py --from-json kovo_023.json`
+
+팀 이름: 남 `대한항공` `삼성화재` `KB손해보험` `현대캐피탈` `한국전력` `OK저축은행` `우리카드` / 여 `현대건설` `한국도로공사` `정관장` `흥국생명` `GS칼텍스` `IBK기업은행` `SOOP` (`페퍼저축은행`은 2025-26까지)
