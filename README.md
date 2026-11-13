@@ -395,3 +395,22 @@ python -m unittest test_vb -v                            # 계산 검증
 받기가 막히면: 브라우저 kovo.co.kr 일정/결과 → F12 → Network → `game-schedule` 응답을 `kovo_023.json`으로 저장 → `python vb_fetch.py --from-json kovo_023.json`
 
 팀 이름: 남 `대한항공` `삼성화재` `KB손해보험` `현대캐피탈` `한국전력` `OK저축은행` `우리카드` / 여 `현대건설` `한국도로공사` `정관장` `흥국생명` `GS칼텍스` `IBK기업은행` `SOOP` (`페퍼저축은행`은 2025-26까지)
+
+---
+
+## 여자농구(WKBL)
+
+같은 계산 방식을 여자농구에도 써요. `--league wkbl`만 붙이면 돼요.
+
+```
+python wkbl_scores.py                                # 이번 시즌 결과 갱신 → wkbl_games.csv
+python predict.py --league wkbl --home 우리은행 --away BNK썸 --total 125.5
+```
+
+- 팀 이름: `우리은행`, `BNK썸`, `KB스타즈`, `삼성생명`, `하나은행`, `신한은행` (띄어쓰기 없음)
+- 지난 시즌 자료: `python wkbl_scores.py --season 2025-26` → `wkbl_games_2025-26.csv`, `wkbl_season_2025-26.csv`
+- 검증: `python predict.py --league wkbl --data wkbl_games_2025-26.csv --prior wkbl_season_2024-25.csv --season 2025-26 --backtest`
+  (2025-26 90경기: 팀 점수 평균 오차 8.1점, 승패 적중 66%)
+- 설정값은 `predict.py`의 `WKBL` 묶음에 있어요. 홈 이점은 두 시즌 실측이 거의 0이라 0으로 뒀어요.
+- 득점대 구간은 여자농구 점수대에 맞춰 임의로 정한 값이에요. 베트맨 회차 구간을 꼭 확인하세요.
+- 상대전적(`wkbl_h2h.csv`), 선수 결장(`wkbl_players.csv`) 파일은 아직 없어요. 없으면 그냥 건너뛰어요.

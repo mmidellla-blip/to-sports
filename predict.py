@@ -43,6 +43,26 @@ FINAL_BINS = [(0, 69, "69점 이하"), (70, 79, "70~79"), (80, 89, "80~89"),
               (90, 99, "90~99"), (100, 109, "100~109"), (110, 999, "110점 이상")]  # 매치 82회차 기준
 # ────────────────────────────────────────────────────────────────
 
+# 여자농구(WKBL) 설정: --league wkbl 이면 위 값을 이걸로 바꿔요.
+# 2024-25·2025-26 정규리그 180경기 실측: 팀당 평균 60.5→64.0점, 홈 득실차 +1.3/-1.6(평균 거의 0), 전반 비율 51.9%/50.0%
+WKBL = {
+    "CURRENT_SEASON": "2026-27", "LAST_SEASON": "2025-26",
+    "HOME_ADV": 0.0, "HALF_RATIO": 0.51,
+    # 오차 폭: 2025-26 90경기 백테스트(지난 시즌 2024-25 평균표 사용) 실측. 승패 적중 66%, 팀 점수 평균 오차 8.1점
+    "MARGIN_SD": 12, "TOTAL_SD": 16, "HALF_SD": 7.2, "SECOND_SD": 6.9, "SECOND_CORR": 0.5,
+    # 득점대는 남자 구간을 그대로 쓰면 거의 다 맨 아래 칸이라 여자농구 점수대에 맞춰 내렸어요.
+    # 베트맨에 여자농구 득점대 게임이 열리면 그 회차 구간으로 꼭 바꾸세요.
+    "HALF_BINS": [(0, 24, "24점 이하"), (25, 29, "25~29"), (30, 34, "30~34"),
+                  (35, 39, "35~39"), (40, 44, "40~44"), (45, 999, "45점 이상")],
+    "FINAL_BINS": [(0, 49, "49점 이하"), (50, 59, "50~59"), (60, 69, "60~69"),
+                   (70, 79, "70~79"), (80, 89, "80~89"), (90, 999, "90점 이상")],
+}
+LEAGUE_FILES = {  # 리그별 기본 파일 (--data/--prior/--h2h/--players 로 직접 바꿀 수 있어요)
+    "kbl": {"data": "games.csv", "prior": "last_season.csv", "h2h": "h2h.csv", "players": "players.csv"},
+    "wkbl": {"data": "wkbl_games.csv", "prior": "wkbl_season_2025-26.csv", "h2h": "wkbl_h2h.csv",
+             "players": "wkbl_players.csv"},
+}
+
 
 def load_games(path):
     df = pd.read_csv(path)
@@ -445,20 +465,26 @@ def backtest(df, quiet=False):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--data", default="games.csv")
+    ap.add_argument("--league", choices=["kbl", "wkbl"], default="kbl", help="kbl=남자농구, wkbl=여자농구")
+    ap.add_argument("--data")
     ap.add_argument("--home")
     ap.add_argument("--away")
     ap.add_argument("--backtest", action="store_true")
-    ap.add_argument("--prior", default="last_season.csv")
-    ap.add_argument("--h2h", default="h2h.csv")
+    ap.add_argument("--prior")
+    ap.add_argument("--h2h")
     ap.add_argument("--total", type=float, help="언더오버 기준점 (예: 173.5)")
     ap.add_argument("--hcp", type=float, help="홈팀 핸디캡 (예: -3.5)")
     ap.add_argument("--absent", help='결장 선수 (예: "창원LG:아치 굿윈,원주DB:레이션 해먼즈")')
-    ap.add_argument("--players", default="players.csv")
+    ap.add_argument("--players")
     ap.add_argument("--boost", help='팀 점수 수동 보정 (예: "원주DB:+3")')
     ap.add_argument("--season", help="이번 시즌 이름 바꾸기 (백테스트용, 예: 2025-26R6)")
     args = ap.parse_args()
     ARGS = args
+    for k, v in LEAGUE_FILES[args.league].items():
+        if getattr(args, k) is None:
+            setattr(args, k, v)
+    if args.league == "wkbl":
+        globals().update(WKBL)
     if args.season:
         CURRENT_SEASON = args.season
         LAST_SEASON = prev_season(args.season, LAST_SEASON)
